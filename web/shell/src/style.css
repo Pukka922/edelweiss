@@ -1,0 +1,8 @@
+@import "tailwindcss" theme(static);
+@plugin "daisyui" {
+  themes:
+    light --default,
+    dark --prefersdark;
+}
+/* SDK components are rendered by the shell and by extensions; their classes must be in the shell CSS. */
+@source "../../sdk/src";

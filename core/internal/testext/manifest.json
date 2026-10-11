@@ -1,0 +1,9 @@
+{
+  "id": "testext",
+  "version": "1.0.0",
+  "apiVersion": 1,
+  "name": { "de": "Testerweiterung", "en": "Test extension" },
+  "menu": { "section": "tools", "order": 99, "icon": "icon.svg" },
+  "ui": { "entry": "index.js" },
+  "requiresAdmin": false
+}

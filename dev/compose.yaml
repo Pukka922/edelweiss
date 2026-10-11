@@ -1,0 +1,52 @@
+name: edelweiss-dev
+services:
+  edelweiss:
+    image: alpine:3.24
+    hostname: edelweiss-dev
+    # Only so the system extension's "change hostname" works inside this dev container.
+    cap_add: ["SYS_ADMIN"]
+    ports:
+      - "127.0.0.1:9090:9090"
+    environment:
+      # make dev DOCKER=1 sets it to 1: dev/docker-setup.sh prepares the container for edelweiss-ext-docker
+      EDELWEISS_DEV_DOCKER: ${EDELWEISS_DEV_DOCKER:-}
+    volumes:
+      - ..:/work:ro
+      # The checkout of edelweiss-ext-system (make dev passes EXT_SYSTEM_DIR as an absolute path); the dev
+      # configuration serves the system extension's UI from /ext-system/ui/dist.
+      - ${EXT_SYSTEM_DIR:-../../edelweiss-ext-system}:/ext-system:ro
+      # the socket of the service docker (empty without DOCKER=1) and the apk cache for the package docker
+      - docker-socket:/run/docker-dev
+      - apk-cache:/var/cache/apk
+    command: ["/bin/sh", "/work/dev/entrypoint.sh"]
+    depends_on: [mock-github]
+  mock-github:
+    image: alpine:3.24
+    # serves build/mock-releases (make mock-releases) as the GitHub API of the dev container
+    volumes:
+      - ..:/work:ro
+    command: ["/work/build/dev/mock-github", "--root", "/work/build/mock-releases", "--listen", ":8080"]
+  # make dev DOCKER=1 (profile docker): a Docker daemon of its own for edelweiss-ext-docker, so that the dev environment
+  # never works on the Docker of the development machine. It listens only on a unix socket whose group is 2375 (the
+  # group docker of the dev container), not on TCP: "dockerd" as the first argument keeps the image's entrypoint from
+  # adding its default hosts, among them tcp://0.0.0.0:2375. dockerd does not create the directory of a custom socket.
+  docker:
+    image: docker:29.9.0-dind
+    profiles: ["docker"]
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+      # for "docker compose exec docker docker …"
+      DOCKER_HOST: unix:///run/docker-dev/docker.sock
+    entrypoint:
+      - /bin/sh
+      - -c
+      - mkdir -p /run/docker-dev && exec dockerd-entrypoint.sh dockerd --host=unix:///run/docker-dev/docker.sock --group=2375
+    volumes:
+      - docker-socket:/run/docker-dev
+      # pulled images survive make dev-down
+      - docker-data:/var/lib/docker
+volumes:
+  docker-socket:
+  docker-data:
+  apk-cache:

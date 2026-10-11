@@ -1,0 +1,24 @@
+# Development only, for the container in dev/compose.yaml: plain HTTP (no TLS), the shell and the system
+# extension are served from the build output. It listens on all interfaces inside the container; it is
+# reachable from this machine only because compose publishes the port as 127.0.0.1:9090. Do not use this
+# configuration outside that compose setup.
+listen = "0.0.0.0:9090"
+
+[tls]
+enabled = false
+
+[log]
+level = "debug"
+
+[dev]
+shell_dir = "/work/web/shell/dist"
+
+# make dev-build builds the system extension in ../edelweiss-ext-system and copies its binary here; the UI comes
+# straight from that checkout (mounted at /ext-system), so npm run watch in its ui/ takes effect on a page reload.
+[[dev.extensions]]
+binary = "/work/build/dev/edelweiss-ext-system"
+ui_dir = "/ext-system/ui/dist"
+
+[github]
+# the mock-github service of dev/compose.yaml (releases built by make mock-releases)
+api_url = "http://mock-github:8080"

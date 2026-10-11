@@ -1,0 +1,13 @@
+/*
+ * Base style sheet for extension UIs. In an extension's src/style.css:
+ *   @import "@edelweiss/sdk/extension.css";
+ *   @source "./";
+ * The shell provides the reset, the theme variables and the daisyUI themes;
+ * an extension only generates the utilities and components it uses.
+ */
+@layer theme, base, components, utilities;
+@import "tailwindcss/theme.css" layer(theme) theme(reference);
+@import "tailwindcss/utilities.css" layer(utilities);
+@plugin "daisyui" {
+  themes: false;
+}

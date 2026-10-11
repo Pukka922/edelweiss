@@ -1,0 +1,84 @@
+# Release for a tag v<version>: edelweissd for amd64 and arm64, the JS SDK tarball and checksums.txt as a GitHub
+# release, and the Go SDK's tag sdk/v<version> on the same commit. The steps only call make targets.
+#
+# Two jobs, so that the build cannot use the write token: "build" runs npm and the Go and web builds with a read-only
+# token and keeps no credentials in the checkout, then hands the files in dist/ on as an artifact. "publish" holds the
+# write token but builds nothing: it tags the Go SDK and creates the release from the files of "build". A compromised
+# build could still hand over altered files under the expected names; checksums.txt shows that the files are
+# consistent, not where they come from.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The version goes into the shell lines of the make recipes, so only a plain v<version> tag gets that far. The
+      # tag reaches the script through the environment, never inline, and the regex has to match all of it.
+      - name: Check the tag name
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          export LC_ALL=C
+          case "$TAG" in
+            v?*) ;;
+            *) echo "not a release tag: $TAG (expected v<version>, for example v0.1.0)" >&2; exit 1 ;;
+          esac
+          [[ "${TAG#v}" =~ ^[0-9A-Za-z.+-]+$ ]] || {
+            echo "not a release tag: $TAG (after the v only letters, digits, \".\", \"+\" and \"-\" are allowed)" >&2
+            exit 1
+          }
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "**/go.sum"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Check the version
+        run: make release-check VERSION="${GITHUB_REF_NAME#v}"
+      - name: Lint and test
+        run: make lint test
+      - name: Build the release files
+        run: make release VERSION="${GITHUB_REF_NAME#v}"
+      # overwrite: "Re-run all jobs" runs this step again, and the artifact of the first attempt already has this name.
+      - uses: actions/upload-artifact@v7
+        with:
+          name: release-files
+          path: dist/
+          if-no-files-found: error
+          overwrite: true
+
+  # Runs only after "build" has checked the tag name and built, so the version below comes from a checked tag. It needs
+  # neither Go nor Node: release-check, sdk-tag and gh-release read files and call git and gh. The checkout keeps its
+  # credentials here, because sdk-tag pushes the tag.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/download-artifact@v8
+        with:
+          name: release-files
+          path: dist
+      - name: Tag the Go SDK
+        run: make sdk-tag VERSION="${GITHUB_REF_NAME#v}"
+      - name: Create the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: make gh-release VERSION="${GITHUB_REF_NAME#v}"

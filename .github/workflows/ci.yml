@@ -1,0 +1,28 @@
+# Lint and tests on every push and pull request. The steps only call make targets, so everything runs locally too.
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: "1.26"
+          cache-dependency-path: "**/go.sum"
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+      - name: Lint and test
+        run: make lint test
+      - name: Check the JS SDK tarball
+        run: make sdk-pack-check

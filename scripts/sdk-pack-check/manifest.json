@@ -1,0 +1,9 @@
+{
+  "id": "probe",
+  "version": "0.1.0",
+  "apiVersion": 1,
+  "name": { "en": "Probe" },
+  "menu": { "section": "tools", "order": 99, "icon": "icon.svg" },
+  "ui": { "entry": "index.js", "styles": ["style.css"], "locales": "locales" },
+  "requiresAdmin": false
+}

@@ -1,0 +1,15 @@
+/dist/
+/build/
+node_modules/
+*.test
+!/dev/Dockerfile.test
+*.out
+/core/internal/webui/dist/*
+!/core/internal/webui/dist/.gitkeep
+web/*/dist/
+.DS_Store
+
+/.superpowers/
+/docs/superpowers/
+/.claude/
+/CLAUDE.md
