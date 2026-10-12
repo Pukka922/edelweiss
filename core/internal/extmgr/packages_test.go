@@ -47,7 +47,7 @@ func scriptExt(t *testing.T, dir, name, manifestJSON string) string {
 	return p
 }
 
-const dockerManifest = `{"id":"docker","version":"%s","apiVersion":1,"name":{"en":"Docker"},"menu":{"section":"containers"}%s}`
+const dockerManifest = `{"id":"docker","version":"%s","apiVersion":1,"name":{"en":"Docker"},"menu":{"section":"virtualization"}%s}`
 
 func dockerScript(t *testing.T, dir, version, requires string) string {
 	t.Helper()
@@ -177,5 +177,68 @@ func TestDevExtensionWithMissingPackagesLoads(t *testing.T) {
 	}
 	if got := m.MissingPackages(e); !slices.Equal(got, []string{"docker"}) {
 		t.Fatalf("MissingPackages = %v", got)
+	}
+}
+
+// containers is the old name of the section virtualization (edelweiss 0.1.0).
+const oldSectionManifest = `{"id":"docker","version":"0.1.0","apiVersion":1,"name":{"en":"Docker"},"menu":{"section":"containers","order":10}}`
+
+// An extension installed under 0.1.0 has the old section name in its stored manifest.json: after the upgrade it must still
+// be loaded, and in the section virtualization, instead of disappearing from the menu.
+func TestLoadReadsTheOldSectionOfAStoredManifestAsVirtualization(t *testing.T) {
+	state := testutil.TempDir(t)
+	dir := filepath.Join(state, "extensions", "docker")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, content := range map[string]string{
+		"manifest.json": oldSectionManifest,
+		"source.json":   `{"type":"file","location":"/tmp/docker","sha256":"","installedAt":"2026-10-01T00:00:00Z"}`,
+		"backend":       "#!/bin/sh\n",
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	m := newPackagesManager(t, state, &fakePackages{}, nil)
+	if err := m.Load(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	e, ok := m.Get("docker")
+	if !ok {
+		t.Fatal("the extension installed under 0.1.0 is gone after the upgrade")
+	}
+	if e.Manifest.Menu.Section != "virtualization" || e.Manifest.Menu.Order != 10 {
+		t.Fatalf("menu %+v, want section virtualization and order 10", e.Manifest.Menu)
+	}
+}
+
+// A binary of an extension built against the SDK 0.1.0 still answers --edelweiss-manifest with the old name: the querier
+// (used by Install and for dev extensions) reads it as virtualization, and the store keeps the new name.
+func TestTheOldSectionOfAManifestAnswerIsReadAsVirtualization(t *testing.T) {
+	state := testutil.TempDir(t)
+	bin := scriptExt(t, state, "docker-old-section", oldSectionManifest)
+	man, err := newQuerier(t).Query(context.Background(), bin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if man.Menu.Section != "virtualization" {
+		t.Fatalf("queried section %q, want virtualization", man.Menu.Section)
+	}
+
+	m := newPackagesManager(t, state, &fakePackages{}, nil)
+	ext, err := m.InstallFile(context.Background(), bin, Source{Type: "file"}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if ext.Manifest.Menu.Section != "virtualization" {
+		t.Fatalf("installed section %q, want virtualization", ext.Manifest.Menu.Section)
+	}
+	stored, err := os.ReadFile(filepath.Join(state, "extensions", "docker", "manifest.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(stored), `"virtualization"`) || strings.Contains(string(stored), `"containers"`) {
+		t.Fatalf("stored manifest %s, want the section virtualization", stored)
 	}
 }

@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -92,6 +93,7 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 		Config: cfg, Auth: authn, Sessions: sessions, Registry: reg, Installer: installer, Pool: pool, Shell: shellFS,
 		Dev: cfg.Dev.ShellDir != "", Version: version.Version, Logger: logger,
 		Hostname: func() string { h, _ := os.Hostname(); return h },
+		Power:    hostPower(cfg, logger, execCommand), PowerDelay: time.Second,
 	})
 	if err != nil {
 		return err
@@ -159,6 +161,44 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	_ = ln.Close()
 	stopPool()
 	return nil
+}
+
+// commandRunner runs a command and returns its combined output; the daemon uses execCommand, tests a recorder.
+type commandRunner func(name string, args ...string) ([]byte, error)
+
+func execCommand(name string, args ...string) ([]byte, error) {
+	return exec.Command(name, args...).CombinedOutput()
+}
+
+// hostPower restarts ("reboot") or shuts down ("poweroff") the host with the commands of busybox/OpenRC on Alpine, by
+// their fixed absolute paths (the symlinks of busybox); any other action is an error and runs nothing. In the
+// development environment (serve --dev: cfg.Dev.Enabled, whatever [dev] holds) it only logs what it would do: the dev
+// container must not restart or stop the developer's machine. A failing command is reported with its output.
+func hostPower(cfg *config.Config, logger *slog.Logger, run commandRunner) server.Power {
+	dev := cfg.Dev.Enabled
+	return func(action string) error {
+		var command string
+		switch action {
+		case "reboot":
+			command = "/sbin/reboot"
+		case "poweroff":
+			command = "/sbin/poweroff"
+		default:
+			return fmt.Errorf("unknown power action %q", action)
+		}
+		if dev {
+			logger.Warn("dev mode: the host would " + action + " now")
+			return nil
+		}
+		out, err := run(command)
+		if err != nil {
+			if msg := strings.TrimSpace(string(out)); msg != "" {
+				return fmt.Errorf("%s: %w: %s", command, err, msg)
+			}
+			return fmt.Errorf("%s: %w", command, err)
+		}
+		return nil
+	}
 }
 
 // listen opens the listener the HTTP server runs on: IPv4 like Fiber's

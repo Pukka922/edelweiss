@@ -158,3 +158,35 @@ func TestRequires(t *testing.T) {
 		t.Fatalf("RequiredAPK() of an empty requires = %v, want nil", empty.RequiredAPK())
 	}
 }
+
+// containers is the old name of the section virtualization (edelweiss 0.1.0): installed extensions keep their place.
+func TestParseReadsTheOldSectionContainersAsVirtualization(t *testing.T) {
+	m, err := Parse([]byte(`{"id":"docker","version":"0.1.0","apiVersion":1,"name":{"en":"Docker"},"menu":{"section":"containers"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if m.Menu.Section != "virtualization" {
+		t.Fatalf("section %q, want virtualization", m.Menu.Section)
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
+func TestTheSectionVirtualizationIsValid(t *testing.T) {
+	m, err := Parse([]byte(`{"id":"kvm","version":"0.1.0","apiVersion":1,"name":{"en":"KVM"},"menu":{"section":"virtualization"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("validate: %v", err)
+	}
+}
+
+// The section order is the order of the menu: virtualization takes the place of containers, and the old name is gone.
+func TestSectionsListVirtualizationInsteadOfContainers(t *testing.T) {
+	want := []string{"system", "storage", "virtualization", "network", "tools", "other"}
+	if !slices.Equal(Sections, want) {
+		t.Fatalf("Sections = %v, want %v", Sections, want)
+	}
+}

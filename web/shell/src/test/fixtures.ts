@@ -17,5 +17,6 @@ export function ext(id: string, section: string, order: number, name = id): Exte
   };
 }
 
-/** The answer of GET /api/extensions/updates when everything is up to date. */
-export const noUpdates = () => json(200, { updates: [], errors: [] });
+/** The answer of GET /api/extensions/updates when everything is up to date, checked just now. */
+export const noUpdates = () =>
+  json(200, { updates: [], errors: [], checkedAt: new Date().toISOString(), ageSeconds: 0, stale: false });

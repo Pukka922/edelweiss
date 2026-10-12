@@ -1,6 +1,14 @@
 // @vitest-environment node
+import type { Plugin } from "vite";
 import { describe, expect, it } from "vitest";
-import { checkManifest, edelweissExtension, sharedModules } from "./vite";
+import { checkManifest, type ExtensionOptions, edelweissExtension, sharedModules } from "./vite";
+
+/** Looks up the plugins of one edelweissExtension() call by name. */
+function pluginsByName(options?: ExtensionOptions) {
+  const plugins = edelweissExtension(options).flat();
+  return (name: string) =>
+    plugins.find((p) => p && typeof p === "object" && "name" in p && p.name === name) as Plugin;
+}
 
 const valid = {
   id: "system",
@@ -74,5 +82,66 @@ describe("edelweissExtension", () => {
     expect(
       plugins.some((p) => p && typeof p === "object" && "name" in p && p.name === "edelweiss-extension"),
     ).toBe(true);
+  });
+
+  it("scopes every CSS asset of each build and leaves JS alone", () => {
+    const named = pluginsByName({ manifest: "../../scripts/sdk-pack-check/manifest.json" });
+    const scope = named("edelweiss-extension-css-scope");
+    expect(scope.apply).toBe("build");
+    expect(scope.enforce).toBe("post");
+    (named("edelweiss-extension").configResolved as (c: { root: string }) => void)({ root: __dirname });
+    // vite build --watch runs the hook again with a new bundle for every rebuild
+    for (let build = 0; build < 2; build++) {
+      const bundle = {
+        "style.css": { type: "asset", fileName: "style.css", source: ".p-4{color:red}" },
+        "extra.css": {
+          type: "asset",
+          fileName: "extra.css",
+          source: new TextEncoder().encode(".a{color:red}"),
+        },
+        "index.js": { type: "chunk", fileName: "index.js", code: "export {}" },
+      };
+      (scope.generateBundle as unknown as (o: unknown, b: typeof bundle) => void)({}, bundle);
+      expect(bundle["style.css"].source).toBe(":where(.edelweiss-ext-probe) .p-4{color:red}");
+      expect(bundle["extra.css"].source).toBe(":where(.edelweiss-ext-probe) .a{color:red}");
+      expect(bundle["index.js"].code).toBe("export {}");
+    }
+  });
+
+  it("refuses to scope when the extension id is unknown", () => {
+    const scope = pluginsByName()("edelweiss-extension-css-scope"); // configResolved of the other plugin never ran
+    const bundle = { "style.css": { type: "asset", fileName: "style.css", source: ".p-4{color:red}" } };
+    // Rollup's this.error throws
+    const error = (message: string): never => {
+      throw new Error(message);
+    };
+    const generate = scope.generateBundle as unknown as (
+      this: { error: typeof error },
+      o: unknown,
+      b: object,
+    ) => void;
+    expect(() => generate.call({ error }, {}, bundle)).toThrow("the extension id is unknown");
+    expect(bundle["style.css"].source).toBe(".p-4{color:red}");
+  });
+
+  it("names the file, the container and the position when a style sheet cannot be scoped", () => {
+    const named = pluginsByName({ manifest: "../../scripts/sdk-pack-check/manifest.json" });
+    (named("edelweiss-extension").configResolved as (c: { root: string }) => void)({ root: __dirname });
+    const broken = ".ok{color:red}\n..a{color:red}";
+    const bundle = { "style.css": { type: "asset", fileName: "style.css", source: broken } };
+    // Rollup's this.error throws
+    const error = (message: string): never => {
+      throw new Error(message);
+    };
+    const generate = named("edelweiss-extension-css-scope").generateBundle as unknown as (
+      this: { error: typeof error },
+      o: unknown,
+      b: object,
+    ) => void;
+    expect(() => generate.call({ error }, {}, bundle)).toThrow(
+      "edelweiss: cannot scope style.css to .edelweiss-ext-probe: " +
+        "Expected identifier in class selector, got Delim('.') (line 2, column 2)",
+    );
+    expect(bundle["style.css"].source).toBe(broken);
   });
 });

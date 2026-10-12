@@ -90,12 +90,7 @@ func runServe(args []string, stderr io.Writer) int {
 		fmt.Fprintln(stderr, err)
 		return 1
 	}
-	level := cfg.LogLevel()
-	if *dev {
-		level = slog.LevelDebug
-	} else {
-		cfg.Dev = config.Dev{} // dev settings only apply with --dev
-	}
+	level := applyDev(cfg, *dev)
 	logger := slog.New(slog.NewTextHandler(stderr, &slog.HandlerOptions{Level: level}))
 	slog.SetDefault(logger)
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
@@ -108,6 +103,18 @@ func runServe(args []string, stderr io.Writer) int {
 		return 1
 	}
 	return 0
+}
+
+// applyDev applies serve's --dev flag to cfg and returns the log level: with the flag the [dev] settings count, the
+// configuration is marked as a development environment (Dev.Enabled, even when [dev] is empty) and the level is debug;
+// without it the [dev] settings are dropped.
+func applyDev(cfg *config.Config, dev bool) slog.Level {
+	if !dev {
+		cfg.Dev = config.Dev{}
+		return cfg.LogLevel()
+	}
+	cfg.Dev.Enabled = true
+	return slog.LevelDebug
 }
 
 // parseInterspersed allows flags before and after positional arguments.

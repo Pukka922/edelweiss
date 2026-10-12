@@ -1,6 +1,6 @@
 {
   "name": "@edelweiss/sdk",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "license": "MIT",
   "private": true,
   "type": "module",
@@ -29,6 +29,7 @@
   "dependencies": {
     "@solid-primitives/i18n": "^2.2.1",
     "@tailwindcss/vite": "^4.3.3",
+    "lightningcss": "1.32.0",
     "vite-plugin-solid": "^2.11.14"
   },
   "peerDependencies": {

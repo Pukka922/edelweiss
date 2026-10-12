@@ -9,7 +9,7 @@ export const de = {
     sections: {
       system: "System",
       storage: "Speicher",
-      containers: "Container",
+      virtualization: "Container & VMs",
       network: "Netzwerk",
       tools: "Werkzeuge",
       other: "Sonstiges",
@@ -37,6 +37,22 @@ export const de = {
     adminOffFailed: "Admin-Modus konnte nicht beendet werden: {{ message }}",
     logoutFailed:
       "Die Abmeldung konnte vom Server nicht bestätigt werden. Deine Sitzung ist möglicherweise noch aktiv.",
+  },
+  host: {
+    menu: "Host",
+    reboot: "Neu starten",
+    poweroff: "Herunterfahren",
+    adminOnly: "Nur für Administratoren",
+    rebootTitle: "Host neu starten",
+    rebootMessage: "Host {{ name }} neu starten? Alle Verbindungen werden getrennt.",
+    poweroffTitle: "Host herunterfahren",
+    poweroffMessage:
+      "Host {{ name }} herunterfahren? edelweiss ist danach nicht erreichbar, bis der Host wieder eingeschaltet wird.",
+    rebooting: "Host {{ name }} startet neu …",
+    poweredOff: "Host {{ name }} wurde heruntergefahren.",
+    stillUp: "Der Host antwortet weiterhin; der Neustart ist womöglich fehlgeschlagen.",
+    close: "Schließen",
+    failed: "Der Host konnte nicht neu gestartet oder heruntergefahren werden: {{ message }}",
   },
   admin: {
     title: "Administrativer Zugriff",
@@ -85,6 +101,9 @@ export const de = {
     updated: "{{ name }} wurde auf {{ version }} aktualisiert.",
     updateCheckFailed: "Updates für {{ id }} konnten nicht geprüft werden: {{ message }}",
     updatesFailed: "Updates konnten nicht geprüft werden: {{ message }}",
+    checkedJustNow: "Gerade eben geprüft",
+    checkedAgo: "Geprüft {{ time }}",
+    updatesStale: "GitHub antwortet gerade nicht ({{ reason }}); angezeigt ist die Prüfung von {{ time }}.",
     missingPackages: "Fehlende Pakete: {{ packages }}. Als root installieren:",
   },
   installer: {
@@ -117,6 +136,7 @@ export const de = {
       github_rate_limited:
         "Das Anfragelimit von GitHub ist erreicht. Versuche es später oder hinterlege einen Token.",
       github_unavailable: "GitHub ist nicht erreichbar: {{ message }}",
+      timeout: "GitHub hat nicht rechtzeitig geantwortet. Versuche es gleich noch einmal.",
       operation_in_progress: "Gerade läuft eine andere Installation. Versuche es gleich noch einmal.",
       invalid_extension: "Die Datei ist keine gültige edelweiss-Extension: {{ message }}",
       id_required: "Das Release enthält mehrere Extensions. Wähle eine aus.",

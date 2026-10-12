@@ -15,7 +15,7 @@ straight from a GitHub release.
 - SDKs for extensions, published with every release: the Go module `github.com/Pukka922/edelweiss/sdk` and the JS SDK
   `@edelweiss/sdk` as `edelweiss-sdk-<version>.tgz`.
 
-**Status:** v0.1, under development.
+**Status:** v0.2, under development.
 
 ## Documentation
 
@@ -34,7 +34,7 @@ make test                     # Go (race detector), web tests and the tests of s
 make lint                     # go vet, gofmt, Biome, TypeScript, actionlint
 make sdk-pack                 # the JS SDK as dist/edelweiss-sdk-<version>.tgz
 make sdk-pack-check           # installs that tarball in a fresh project, builds, type-checks and tests a UI with it
-make release VERSION=0.1.0    # all release files in dist/ (see Releasing)
+make release VERSION=0.2.0    # all release files in dist/ (see Releasing)
 ```
 
 `make sdk-pack-check` needs the npm registry.

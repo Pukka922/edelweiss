@@ -21,7 +21,7 @@ Download `edelweissd_<version>_linux_<arch>` and `checksums.txt` from the
 ```sh
 make build
 ls dist/
-# checksums.txt  edelweissd_0.1.0_linux_amd64  edelweissd_0.1.0_linux_arm64
+# checksums.txt  edelweissd_0.2.0_linux_amd64  edelweissd_0.2.0_linux_arm64
 ```
 
 Copy the binary and `checksums.txt` to the host, for example with `scp`, and verify it there:
@@ -33,7 +33,7 @@ out. The extensions, the system overview among them, are installed in step 4.
 
 ```sh
 mkdir -p /usr/local/sbin                       # the minimal Alpine image has no /usr/local/sbin
-install -m 755 edelweissd_0.1.0_linux_amd64 /usr/local/sbin/edelweissd
+install -m 755 edelweissd_0.2.0_linux_amd64 /usr/local/sbin/edelweissd
 edelweissd service install
 ```
 
@@ -134,7 +134,10 @@ installs exactly the file you confirmed, and fails if the release changed since.
 The extensions page of the web interface checks for updates when you open it in admin mode or turn admin mode on
 there, after an install from GitHub, and again with **Check for updates**. It offers each one as an **Update to**
 button with the new version; the confirmation dialog shows the same details and the same warning as the command
-line.
+line. edelweissd keeps the result of a check for 2 minutes, for every page and user (GitHub allows 60 requests an
+hour without `github.token`); **Check for updates** always asks GitHub, and so does the check after a refused update.
+If GitHub does not answer (rate limit, outage) or the check runs out of time, the page shows the last good result with
+a note.
 
 Other commands: `edelweissd ext list`, `edelweissd ext remove <id>` (the extensions page can remove extensions
 too). A running service picks up every change made with the command line within a moment; it stops the processes of
@@ -255,6 +258,9 @@ The init script is rewritten on every `service install`, so a new release can ch
 version); without this step the service keeps the old script.
 
 A restart stops the extension processes and signs everybody out (sessions are kept in memory only).
+
+Admins can restart and shut down the host in the web interface (the Host menu, admin mode); edelweissd runs `reboot` or
+`poweroff`.
 
 ## Uninstalling
 

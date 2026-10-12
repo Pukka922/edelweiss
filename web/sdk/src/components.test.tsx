@@ -115,6 +115,43 @@ describe("components", () => {
     expect(onCancel).not.toHaveBeenCalled();
   });
 
+  it("ConfirmDialog while busy disables both buttons, shows the spinner and ignores every way to leave or repeat", () => {
+    const onConfirm = vi.fn();
+    const onCancel = vi.fn();
+    const [busy, setBusy] = createSignal(false);
+    const { getByRole, container } = render(() => (
+      <TestShell>
+        <ConfirmDialog
+          open
+          title="Restart?"
+          message="Really"
+          busy={busy()}
+          onConfirm={onConfirm}
+          onCancel={onCancel}
+        />
+      </TestShell>
+    ));
+    const confirm = getByRole("button", { name: "Confirm" }) as HTMLButtonElement;
+    const cancel = getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
+    expect(confirm.disabled || cancel.disabled).toBe(false);
+    expect(container.querySelector(".loading")).toBeNull();
+
+    setBusy(true);
+    expect(confirm.disabled && cancel.disabled).toBe(true);
+    expect(confirm.getAttribute("aria-busy")).toBe("true");
+    expect(confirm.querySelector(".loading")).not.toBeNull();
+    fireEvent.click(confirm);
+    fireEvent.click(cancel);
+    fireEvent.keyDown(document, { key: "Escape" });
+    fireEvent.click(container.querySelector(".modal-backdrop")!);
+    expect(onConfirm).not.toHaveBeenCalled();
+    expect(onCancel).not.toHaveBeenCalled();
+
+    setBusy(false);
+    fireEvent.click(confirm);
+    expect(onConfirm).toHaveBeenCalledOnce();
+  });
+
   it("AdminRequired offers admin mode only to admin-capable users", () => {
     const capable = fakeSession({ canAdmin: true });
     const { getByRole, unmount } = render(() => (

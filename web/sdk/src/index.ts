@@ -14,6 +14,7 @@ export type { Dict, I18n, Params, Translator } from "./i18n";
 export { createI18n, I18nContext, useI18n } from "./i18n";
 export type { ExtensionRoute, RouteMatch } from "./router";
 export { ExtensionRouter, extensionPath, matchRoute, useExtensionNavigate } from "./router";
+export { extensionScopeClass } from "./scope";
 export type { SessionApi } from "./session";
 export { SessionContext, useSession } from "./session";
 export type { Socket } from "./socket";

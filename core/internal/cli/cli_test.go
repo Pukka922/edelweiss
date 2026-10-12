@@ -626,3 +626,26 @@ func TestExtListNamesWhyPackagesCannotBeChecked(t *testing.T) {
 		t.Errorf("everything installed: output:\n%s\nstderr: %q", out, errOut)
 	}
 }
+
+// --dev, and only --dev, makes a development environment: the [dev] settings count (or are dropped), and the
+// configuration is marked even when [dev] is empty, which keeps the host's power actions from running for real.
+func TestDevFlagDecidesTheDevelopmentMode(t *testing.T) {
+	withSettings := func() *config.Config {
+		cfg := config.Default()
+		cfg.Dev = config.Dev{ShellDir: "/work/web/shell/dist"}
+		return cfg
+	}
+
+	cfg := withSettings()
+	if level := applyDev(cfg, true); level != slog.LevelDebug || !cfg.Dev.Enabled || cfg.Dev.ShellDir == "" {
+		t.Fatalf("--dev: level %v, %+v", level, cfg.Dev)
+	}
+	empty := config.Default() // --dev without any [dev] setting
+	if applyDev(empty, true); !empty.Dev.Enabled {
+		t.Fatalf("--dev with an empty [dev] section: %+v", empty.Dev)
+	}
+	cfg = withSettings()
+	if level := applyDev(cfg, false); level != cfg.LogLevel() || cfg.Dev.Enabled || cfg.Dev.ShellDir != "" {
+		t.Fatalf("without --dev: level %v, %+v", level, cfg.Dev)
+	}
+}

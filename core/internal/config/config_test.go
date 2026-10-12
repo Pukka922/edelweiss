@@ -82,6 +82,7 @@ func TestLoadRejects(t *testing.T) {
 		"bad level":        "[log]\nlevel = \"loud\"",
 		"empty port":       `listen = "0.0.0.0:"`,
 		"non-numeric port": `listen = "0.0.0.0:abc"`,
+		"dev flag in file": "[dev]\nenabled = true", // only serve --dev switches the development mode on
 	}
 	for name, content := range cases {
 		t.Run(name, func(t *testing.T) {

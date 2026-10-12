@@ -20,6 +20,14 @@ describe("groupBySection", () => {
     expect(groups[1]!.items.map((e) => e.id)).toEqual(["c", "a", "b"]);
     expect(groups[2]!.items.map((e) => e.id)).toEqual(["x"]);
   });
+
+  it("puts virtualization between storage and network", () => {
+    const groups = groupBySection(
+      [ext("n", "network", 1), ext("v", "virtualization", 1), ext("s", "storage", 1), ext("t", "tools", 1)],
+      "en",
+    );
+    expect(groups.map((g) => g.section)).toEqual(["storage", "virtualization", "network", "tools"]);
+  });
 });
 
 describe("extensions store", () => {

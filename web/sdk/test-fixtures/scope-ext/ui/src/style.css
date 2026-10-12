@@ -1,0 +1,5 @@
+@import "../../../../extension.css";
+@source "./";
+@theme {
+  --color-brand: red;
+}

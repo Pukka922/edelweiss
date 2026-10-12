@@ -7,7 +7,8 @@ import {
   PageHeader,
   useI18n,
 } from "@edelweiss/sdk";
-import { batch, createEffect, createSignal, For, on, Show } from "solid-js";
+import { IconTrash } from "@tabler/icons-solidjs";
+import { batch, createEffect, createSignal, For, on, onCleanup, Show } from "solid-js";
 import { InstallDialog, installerMessage } from "../components/InstallDialog";
 import { UpdateDialog, type UpdateTarget } from "../components/UpdateDialog";
 import { useShell } from "../context";
@@ -22,7 +23,7 @@ function sourceText(ext: ExtensionInfo): string {
 
 export function ExtensionsPage() {
   const shell = useShell();
-  const { t } = useI18n("shell");
+  const { t, locale } = useI18n("shell");
   const [removing, setRemoving] = createSignal<ExtensionInfo>();
   // The update being confirmed; it stays set, and its dialog open, while updatingId says that it is running, and
   // after a refusal, whose message the dialog shows until the user cancels or tries again.
@@ -37,6 +38,40 @@ export function ExtensionsPage() {
   const [installing, setInstalling] = createSignal(false);
   const [updates, setUpdates] = createSignal<Record<string, Update>>({});
   const [checking, setChecking] = createSignal(false);
+  // The result on show: when it was found, how old it was by the clock of the core when the answer arrived, and when
+  // that was by the clock of the browser (a browser clock that is wrong must not make the age wrong: only the time
+  // since the answer is measured here). And whether GitHub failed to answer since, so that it is the last good result.
+  const [checked, setChecked] = createSignal<{ at: Date; ageMs: number; receivedAt: number }>();
+  const [stale, setStale] = createSignal(false);
+  const [staleCode, setStaleCode] = createSignal("");
+  const [staleReason, setStaleReason] = createSignal("");
+  // The clock of the age of the check; it ticks while the page is open.
+  const [now, setNow] = createSignal(Date.now());
+  const tick = setInterval(() => setNow(Date.now()), 15_000);
+  onCleanup(() => clearInterval(tick));
+  const checkedText = () => {
+    const c = checked();
+    if (!c) return "";
+    const minutes = Math.floor(Math.max(0, c.ageMs + now() - c.receivedAt) / 60_000);
+    if (minutes < 1) return t("extensions.checkedJustNow");
+    // A kept result can be old (GitHub does not answer for an hour or more): the unit follows the size of the age, and
+    // the formatter says it in the words and plural forms of the language ("1 hour ago", "yesterday", "vor 3 Tagen").
+    const [count, unit]: [number, Intl.RelativeTimeFormatUnit] =
+      minutes < 60
+        ? [minutes, "minute"]
+        : minutes < 24 * 60
+          ? [Math.floor(minutes / 60), "hour"]
+          : [Math.floor(minutes / (24 * 60)), "day"];
+    const time = new Intl.RelativeTimeFormat(locale(), { numeric: "auto" }).format(-count, unit);
+    return t("extensions.checkedAgo", { time });
+  };
+  const staleText = (at: Date) =>
+    t("extensions.updatesStale", {
+      // a code the shell knows has its own text; for any other, the message of the core is the reason
+      reason: t(installerErrorKey(staleCode()), { message: staleReason() }).replace(/\.$/, ""),
+      // with the date: the kept result may be from another day
+      time: new Intl.DateTimeFormat(locale(), { dateStyle: "short", timeStyle: "short" }).format(at),
+    });
   const name = (e: ExtensionInfo | undefined) => localized(e?.name, shell.i18n.locale());
 
   // Changing extensions needs admin mode: offered to those in it and to those who may enter it, not to everybody else.
@@ -46,17 +81,36 @@ export function ExtensionsPage() {
   // Bumped by every check and when admin mode ends: only the answer to the latest check is applied, and not at all
   // once admin mode is gone (answers can arrive in any order, and a list from an ended admin mode must not come back).
   let generation = 0;
-  const checkUpdates = async () => {
+  // refresh: GitHub is asked, not only the cache of the core. It is for what the user asked for (the button) and for
+  // a check after a refusal that the cache does not know about (the release changed).
+  const checkUpdates = async (refresh = false) => {
     const mine = ++generation;
     const current = () => mine === generation && shell.session.admin();
     setChecking(true);
     try {
-      const res = await shell.installer.updates();
+      const res = await shell.installer.updates(refresh);
       if (!current()) return;
-      setUpdates(Object.fromEntries(res.updates.map((u) => [u.id, u])));
-      for (const e of res.errors) {
-        const message = t(installerErrorKey(e.code), { message: e.message });
-        shell.toasts.error(t("extensions.updateCheckFailed", { id: e.id, message }));
+      const at = new Date(res.checkedAt);
+      const receivedAt = Date.now();
+      batch(() => {
+        setUpdates(Object.fromEntries(res.updates.map((u) => [u.id, u])));
+        setChecked(
+          Number.isNaN(at.getTime()) || !Number.isFinite(res.ageSeconds)
+            ? undefined
+            : { at, ageMs: res.ageSeconds * 1000, receivedAt },
+        );
+        setStale(res.stale);
+        setStaleCode(res.staleCode ?? "");
+        setStaleReason(res.staleReason ?? "");
+        setNow(receivedAt);
+      });
+      // the core answers from its cache for 2 minutes, also when the page is visited again: the same check is not
+      // told again
+      if (shell.updateChecks.isNew(res.checkedAt)) {
+        for (const e of res.errors) {
+          const message = t(installerErrorKey(e.code), { message: e.message });
+          shell.toasts.error(t("extensions.updateCheckFailed", { id: e.id, message }));
+        }
       }
     } catch (err) {
       if (current()) shell.toasts.error(t("extensions.updatesFailed", { message: installerMessage(err, t) }));
@@ -64,6 +118,8 @@ export function ExtensionsPage() {
       if (mine === generation) setChecking(false);
     }
   };
+  // The button was pressed outside admin mode: the check that follows once admin mode is on is the button's.
+  let refreshNext = false;
   // Update checks need admin mode: run one whenever it turns on; when it ends, forget the results, abandon a check
   // that is under way and close a confirmation that has not started yet.
   createEffect(
@@ -71,21 +127,31 @@ export function ExtensionsPage() {
       () => shell.session.admin(),
       (admin) => {
         if (admin) {
-          void checkUpdates();
+          const refresh = refreshNext;
+          refreshNext = false;
+          void checkUpdates(refresh);
           return;
         }
         generation++;
         batch(() => {
           setChecking(false);
           setUpdates({});
+          setChecked(undefined);
+          setStale(false);
           if (updatingId() === undefined) closeUpdate();
         });
       },
     ),
   );
   const askCheck = () => {
-    if (shell.session.admin()) void checkUpdates();
-    else void shell.session.requestAdmin(); // the effect above checks once admin mode is on
+    if (shell.session.admin()) {
+      void checkUpdates(true);
+      return;
+    }
+    refreshNext = true; // the effect above checks once admin mode is on
+    void shell.session.requestAdmin().then((granted) => {
+      if (!granted) refreshNext = false; // declined: a later admin mode, turned on elsewhere, is not the button's
+    });
   };
 
   const askInstall = async () => {
@@ -106,6 +172,7 @@ export function ExtensionsPage() {
       setUpdateError(undefined);
       setUpdatingId(u.ext.id);
     });
+    let refused = false;
     try {
       // the checksum the user confirmed goes along: the core refuses if the latest release has another one
       const ext = await shell.installer.update(u.ext.id, u.update.sha256);
@@ -118,14 +185,16 @@ export function ExtensionsPage() {
     } catch (err) {
       // a refusal is told in the dialog, which stays open: a toast is gone after a few seconds, and the list has
       // nothing to show for it (the installed version needs nothing), so the user could not read what to do
+      refused = true;
       batch(() => {
         setUpdateError(installerMessage(err, t));
         setUpdatingId(undefined);
       });
     }
-    // The entry the user confirmed is outdated now, whichever way it went: after a refusal (the release changed)
-    // it still carries the old checksum, so look at the releases as they are.
-    await checkUpdates();
+    // The entry the user confirmed is outdated now, whichever way it went. After an update the core's cache does not
+    // apply any more (the version changed). After a refusal (the release changed) it does, and still holds the entry
+    // with the old checksum: look at the releases as they are, on GitHub.
+    await checkUpdates(refused);
   };
 
   const askRemove = async (ext: ExtensionInfo) => {
@@ -157,6 +226,9 @@ export function ExtensionsPage() {
         subtitle={t("extensions.subtitle")}
         actions={
           <Show when={mayChange()}>
+            <Show when={checked()}>
+              <span class="self-center text-sm text-base-content/70">{checkedText()}</span>
+            </Show>
             <button type="button" class="btn btn-sm" disabled={checking()} onClick={askCheck}>
               {checking() ? t("extensions.checking") : t("extensions.checkUpdates")}
             </button>
@@ -166,6 +238,13 @@ export function ExtensionsPage() {
           </Show>
         }
       />
+      <Show when={stale() && checked()}>
+        {(c) => (
+          <div role="status" class="alert alert-warning mb-4 text-sm">
+            <p>{staleText(c().at)}</p>
+          </div>
+        )}
+      </Show>
       <Show when={shell.extensions.error()}>
         {(err) => <ErrorAlert error={err()} onRetry={() => void shell.extensions.reload()} />}
       </Show>
@@ -231,14 +310,22 @@ export function ExtensionsPage() {
                             </button>
                           )}
                         </Show>
-                        <button
-                          type="button"
-                          class="btn btn-sm btn-ghost text-error"
-                          disabled={ext.dev || !mayChange() || updatingId() === ext.id}
-                          onClick={() => void askRemove(ext)}
+                        <div
+                          class="tooltip tooltip-left before:max-w-none before:whitespace-nowrap"
+                          data-tip={t("extensions.remove")}
                         >
-                          {t("extensions.remove")}
-                        </button>
+                          <button
+                            type="button"
+                            class="btn btn-ghost btn-sm btn-square text-error disabled:opacity-40"
+                            aria-label={`${t("extensions.remove")} ${name(ext)}`}
+                            disabled={ext.dev || !mayChange() || updatingId() === ext.id}
+                            onClick={() => void askRemove(ext)}
+                          >
+                            <span aria-hidden="true">
+                              <IconTrash size={18} strokeWidth={1.75} />
+                            </span>
+                          </button>
+                        </div>
                       </div>
                     </td>
                   </tr>

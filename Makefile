@@ -3,7 +3,7 @@ GO ?= go
 # sdk/protocol.go) and the JS SDK (web/sdk/package.json, the exact @edelweiss/sdk pin of web/shell and the web/sdk
 # entry of package-lock.json, which npm install refreshes).
 # make release-check VERSION=<tag without v> compares them.
-RELEASE_VERSION := 0.1.0
+RELEASE_VERSION := 0.2.0
 VERSION ?= $(RELEASE_VERSION)
 # The files of a release in dist/, besides checksums.txt: make release writes them, make gh-release uploads exactly these.
 RELEASE_FILES = edelweissd_$(VERSION)_linux_amd64 edelweissd_$(VERSION)_linux_arm64 edelweiss-sdk-$(VERSION).tgz

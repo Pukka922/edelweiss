@@ -80,6 +80,52 @@ describe("ExtensionHost", () => {
     expect(document.querySelectorAll('link[data-ext-style="/ext/system/ui/style.css"]')).toHaveLength(1);
   });
 
+  it("renders the extension inside its container", async () => {
+    const loader = vi.fn(async () => ({
+      default: defineExtension({ component: () => <p data-testid="probe">hi</p> }),
+    }));
+    const { findByTestId } = await mount("/x/hello", [ext("hello", "tools", 1)], loader);
+    const probe = await findByTestId("probe");
+    const box = probe.parentElement?.closest(".edelweiss-ext-hello");
+    expect(box).not.toBeNull();
+    expect(box?.className).toBe("edelweiss-ext-hello");
+    expect(probe.parentElement).toBe(box); // the component's root sits right inside the container
+  });
+
+  it("keeps the shell's own panels outside the container", async () => {
+    const outsideContainer = (panel: string) =>
+      expect(document.querySelector("[class*='edelweiss-ext-']"), panel).toBeNull();
+    const loader = vi.fn(async () => ({ default: defineExtension({ component: () => <p>never</p> }) }));
+    const needs = { ...ext("scopepkg", "tools", 1), missingPackages: ["docker"] };
+    const missing = await mount("/x/scopepkg", [needs], loader);
+    await missing.findByRole("alert");
+    outsideContainer("missing packages");
+    cleanup();
+
+    const raid = { ...ext("scoperaid", "storage", 1), requiresAdmin: true };
+    const admin = await mount("/x/scoperaid", [raid], loader);
+    await admin.findByRole("button", { name: "Enable admin mode" });
+    outsideContainer("admin required");
+    expect(loader).not.toHaveBeenCalled();
+    cleanup();
+
+    // no locale files here: the failing request is the module itself
+    const broken = {
+      ...ext("scopefail", "tools", 1),
+      ui: { entry: "/ext/scopefail/ui/index.js", styles: [] },
+    };
+    const failed = await mount("/x/scopefail", [broken], async () => {
+      throw new TypeError("Failed to fetch dynamically imported module");
+    });
+    expect((await failed.findByRole("alert")).textContent).toContain("Failed to fetch");
+    outsideContainer("load error");
+    cleanup();
+
+    const unknown = await mount("/x/scopenone", [], async () => ({}));
+    expect((await unknown.findByRole("alert")).textContent).toContain("not installed");
+    outsideContainer("not found");
+  });
+
   it("adds each stylesheet only once, however often the extension loads", async () => {
     const styled = {
       ...ext("styled", "tools", 1),
@@ -123,7 +169,7 @@ describe("ExtensionHost", () => {
 
   it("shows the missing packages instead of the extension, and loads it once they are installed", async () => {
     const needs = {
-      ...ext("needspkg", "containers", 1, "Needs"),
+      ...ext("needspkg", "virtualization", 1, "Needs"),
       requires: { apk: ["docker", "cmd:docker-compose"] },
       missingPackages: ["docker", "cmd:docker-compose"],
     };

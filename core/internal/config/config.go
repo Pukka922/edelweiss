@@ -115,6 +115,10 @@ type Paths struct {
 }
 
 type Dev struct {
+	// Enabled is set by serve --dev, never by the file: this is a development environment, so nothing that would
+	// restart or stop the developer's machine may run (restarting the host only logs). The [dev] settings below may
+	// be empty then.
+	Enabled    bool           `toml:"-"`
 	ShellDir   string         `toml:"shell_dir"`
 	Extensions []DevExtension `toml:"extensions"`
 }

@@ -32,6 +32,8 @@ type fakeInstaller struct {
 	updates  func() ([]extmgr.Update, []extmgr.UpdateError)
 	update   func(id, sha string) (*extmgr.Extension, error)
 	requests []string
+
+	updateCalls int // how often Updates was called
 }
 
 func (f *fakeInstaller) record(s string) {
@@ -50,7 +52,11 @@ func (f *fakeInstaller) Install(_ context.Context, req extmgr.InstallRequest) (*
 }
 func (f *fakeInstaller) Updates(context.Context) ([]extmgr.Update, []extmgr.UpdateError) {
 	f.record("updates")
-	return f.updates()
+	f.mu.Lock()
+	f.updateCalls++
+	updates := f.updates
+	f.mu.Unlock()
+	return updates()
 }
 func (f *fakeInstaller) Update(_ context.Context, id, confirmed string) (*extmgr.Extension, error) {
 	f.record(fmt.Sprintf("update %s %s", id, confirmed))
@@ -69,12 +75,85 @@ func helloExt(version string) *extmgr.Extension {
 	}
 }
 
-func newInstallEnv(t *testing.T, f *fakeInstaller) (*testEnv, *client) {
+// githubRegistry is the test registry with testext listed as installed from GitHub, plus the extensions that
+// installGitHubExtension added (the registry of the environment can only install the binary of testext).
+type githubRegistry struct {
+	Registry
+	mu    sync.Mutex
+	extra []*extmgr.Extension
+}
+
+func (r *githubRegistry) List() []*extmgr.Extension {
+	list := r.Registry.List()
+	for i, e := range list {
+		if e.Manifest.ID == "testext" {
+			c := *e
+			c.Source = extmgr.Source{Type: "github", Location: "github.com/edelweiss/testext", Repo: "edelweiss/testext",
+				Tag: "v" + e.Manifest.Version, SHA256: helloSum}
+			list[i] = &c
+		}
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return append(list, r.extra...)
+}
+
+// installEnv is a test environment with an installer and a signed-in client in admin mode.
+type installEnv struct {
+	*testEnv
+	github *githubRegistry
+}
+
+// list puts ext into the registry, in place of the extra extension with the same id (an update).
+func (e *installEnv) list(ext *extmgr.Extension) {
+	e.github.mu.Lock()
+	defer e.github.mu.Unlock()
+	e.github.extra = slices.DeleteFunc(e.github.extra, func(x *extmgr.Extension) bool { return x.Manifest.ID == ext.Manifest.ID })
+	e.github.extra = append(e.github.extra, ext)
+}
+
+// installGitHubExtension lists another extension installed from GitHub; with an id that was installed before, in
+// another version, it is an update.
+func (e *installEnv) installGitHubExtension(id, version string) {
+	ext := helloExt(version)
+	ext.Manifest.ID = id
+	ext.Source.Repo = "edelweiss/" + id
+	e.list(ext)
+}
+
+// installLocalExtension lists an extension that is not from GitHub: a dev extension, or one installed from a file.
+func (e *installEnv) installLocalExtension(id, version string, dev bool) {
+	ext := helloExt(version)
+	ext.Manifest.ID = id
+	ext.Source = extmgr.Source{Type: "file", Location: "/tmp/" + id, SHA256: helloSum}
+	if dev {
+		ext.Source.Type, ext.Dev = "dev", true
+	}
+	e.list(ext)
+}
+
+// removeExtension removes an extension that was listed with one of the methods above.
+func (e *installEnv) removeExtension(id string) {
+	e.github.mu.Lock()
+	defer e.github.mu.Unlock()
+	e.github.extra = slices.DeleteFunc(e.github.extra, func(x *extmgr.Extension) bool { return x.Manifest.ID == id })
+}
+
+// newInstallEnv is newTestEnv with f as the installer; options change the Deps further. The client is in admin mode.
+func newInstallEnv(t *testing.T, f *fakeInstaller, options ...func(*Deps)) (*installEnv, *client) {
 	t.Helper()
-	env := newTestEnv(t, func(d *Deps) { d.Installer = f })
+	var reg *githubRegistry
+	env := newTestEnv(t, func(d *Deps) {
+		d.Installer = f
+		reg = &githubRegistry{Registry: d.Registry}
+		d.Registry = reg
+		for _, o := range options {
+			o(d)
+		}
+	})
 	alice := &client{t: t, app: env.app}
 	enableAdmin(t, alice)
-	return env, alice
+	return &installEnv{testEnv: env, github: reg}, alice
 }
 
 func TestInstallRoutesNeedAdminMode(t *testing.T) {
@@ -513,7 +592,7 @@ func (r missingRegistry) MissingPackages(e *extmgr.Extension) []string {
 func TestListShowsRequiredAndMissingPackages(t *testing.T) {
 	docker := &extmgr.Extension{
 		Manifest: &manifest.Manifest{ID: "docker", Version: "0.1.0", APIVersion: 1, Name: manifest.Localized{"en": "Docker"},
-			Menu: manifest.Menu{Section: "containers", Order: 10}, Requires: &manifest.Requires{APK: []string{"docker"}}},
+			Menu: manifest.Menu{Section: "virtualization", Order: 10}, Requires: &manifest.Requires{APK: []string{"docker"}}},
 		Source: extmgr.Source{Type: "file", Location: "/tmp/docker"},
 	}
 	env := newTestEnv(t, func(d *Deps) { d.Registry = missingRegistry{Registry: d.Registry, docker: docker} })

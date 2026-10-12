@@ -11,7 +11,12 @@ import { de } from "./i18n/de";
 import { en } from "./i18n/en";
 import { applyLocale, loadLocale, loadTheme, saveLocale, saveTheme, type Theme } from "./prefs";
 import { createExtensionsStore, type ExtensionsStore } from "./state/extensions";
-import { createInstallerApi, type InstallerApi } from "./state/installer";
+import {
+  type CheckMemory,
+  createCheckMemory,
+  createInstallerApi,
+  type InstallerApi,
+} from "./state/installer";
 import { createSessionStore, type SessionStore } from "./state/session";
 import { createToastStore, type ToastStore } from "./state/toasts";
 
@@ -19,6 +24,8 @@ export interface Shell {
   session: SessionStore;
   extensions: ExtensionsStore;
   installer: InstallerApi;
+  /** Which update check the extensions page showed the errors of; it outlives the page. */
+  updateChecks: CheckMemory;
   toasts: ToastStore;
   i18n: I18n;
   theme: Accessor<Theme>;
@@ -49,6 +56,7 @@ export function createShell(options: { fetch?: typeof fetch; locale?: Locale; th
     session,
     extensions: createExtensionsStore(session.api),
     installer: createInstallerApi(session.api),
+    updateChecks: createCheckMemory(),
     toasts: createToastStore(),
     i18n,
     theme,

@@ -104,7 +104,7 @@ edelweiss-ext-system has the same parts; its backend lives in packages below `in
 | `version` | semantic version (`1.2.3`, optionally `-pre` or `+build`); must match the release file name |
 | `apiVersion` | `1` (the contract: Solid 1.x runtime, SDK, headers) |
 | `name` | `en` is required, `de` recommended |
-| `menu.section` | `system`, `storage`, `containers`, `network`, `tools` or `other`; `order` sorts within the section |
+| `menu.section` | `system`, `storage`, `virtualization`, `network`, `tools` or `other`; `order` sorts within the section. `containers` (edelweiss 0.1.0) is still read as `virtualization`. An extension with `virtualization` needs edelweiss 0.2.0: edelweiss 0.1.0 rejects the unknown section |
 | `menu.icon` | SVG file in the UI, used as a mask: its shape is drawn in the text colour of the menu |
 | `ui` | entry module, style sheets and locale directory, relative to `ui/dist`; `edelweissExtension()` builds `index.js` and `style.css` and refuses other values |
 | `requiresAdmin` | `true`: only reachable in admin mode (the extension then always runs as root) |
@@ -284,6 +284,56 @@ export function Hello() {
 Styles: `src/style.css` imports `@edelweiss/sdk/extension.css` and lists its sources (`@source "./"`). Use Tailwind
 4 and daisyUI 5 classes; the themes (light/dark) come from the shell.
 
+The style sheet is scoped to the extension. The shell renders the extension inside `<div class="edelweiss-ext-<id>">`
+(`<id>` from the manifest; `extensionScopeClass(id)` from `@edelweiss/sdk` returns the class), and the build puts
+`:where(.edelweiss-ext-<id>)` in front of every selector of `style.css` – Tailwind's utilities, daisyUI and your own CSS
+(`.btn` becomes `:where(.edelweiss-ext-<id>) .btn`). `:where()` adds no specificity, so the rules compete as they are
+written. Apart from the page-level rules listed below, your CSS reaches only the extension's own markup. The container
+itself gets none of your rules (but your `@theme` variables, see below); the component's root element sits directly
+inside it. These stay global:
+
+- the page's own rules: selectors that start with `:root`, `html`, `body`, `:host` or `[data-theme…]` (daisyUI's
+  `:root:has(.modal-open)`, which locks page scrolling while a dialog is open, is one). A selector that goes on after
+  such a start is scoped behind the last of them: `html .x` becomes `html :where(.edelweiss-ext-<id>) .x` and
+  `html body .x` becomes `html body :where(.edelweiss-ext-<id>) .x`;
+- `@keyframes`, `@property` and `@font-face`. Their names are global too, so give your own a name no other extension
+  is likely to pick, for example one that starts with your id.
+
+The variables of your own `@theme { … }` are the exception to the page's rules. Tailwind emits them for `:root` and
+`:host`; the build puts them on the container instead (`:where(.edelweiss-ext-<id>) { --color-brand: … }`), so they
+apply inside your extension only and cannot override the shell's variables.
+
+The build also rewrites the sheet for the browsers Tailwind 4 targets (Safari 16.4, Firefox 128, Chrome 111): nested CSS
+is flattened; `@charset` is dropped, and so are comments, except `/*! … */` licence comments at the start of the file.
+CSS that cannot be parsed fails the build instead of shipping unscoped. Of an `@scope` rule only the scope start is
+scoped; its limit and the rules inside are relative to it.
+
+Only the CSS files of the extension build (`style.css`) are scoped. CSS that does not go through them – a `?inline`
+import that you put into a `<style>` element yourself, CSS-in-JS – reaches the page as it is, unscoped.
+
+Everything the extension renders must stay inside its container: content rendered directly into `<body>` gets none of
+your CSS. Solid's `Portal` renders into `<body>` by default; give it a `mount` inside your own markup:
+
+```tsx
+import { Portal } from "solid-js/web";
+
+export function Hello() {
+  let box!: HTMLDivElement;
+  return (
+    <div ref={box}>
+      {/* … */}
+      <Portal mount={box}>
+        <div class="card bg-base-100 shadow-lg">{/* inside the container, so your CSS applies */}</div>
+      </Portal>
+    </div>
+  );
+}
+```
+
+The shell's own CSS (the reset, the theme variables, its classes) still applies to the whole page, the extension
+included. An extension built with SDK 0.2.0 needs edelweiss 0.2.0 or newer: edelweiss 0.1.0 renders no container, so
+the extension would show without its styles.
+
 Texts: `public/locales/en.json` and `de.json` (nested keys are allowed, `{{ param }}` placeholders), copied to
 `ui/dist/locales` and registered under the extension's id; a missing key falls back to `en`, then to the key itself.
 The backend gets the language as `X-Edelweiss-Lang`; if it returns texts, ask it again when `locale()` changes. If
@@ -342,7 +392,9 @@ extension and stops its processes.
 The system overview runs in the dev container as a *development extension* instead (`[[dev.extensions]]` in
 `dev/edelweiss.dev.toml`). edelweissd restarts it when its binary changes (`make dev-build`) and serves its UI straight
 from `../edelweiss-ext-system/ui/dist`, so `npm run watch` in its `ui/` and a page reload are enough for UI changes.
-Development extensions carry a `dev` badge on the extensions page and cannot be removed there.
+Keep `ui/dist` git-ignored in an extension of your own (the template's `ui/.gitignore` ignores `dist/*`): otherwise
+Tailwind scans the build output as a source and `vite build --watch` rebuilds in a loop. Development extensions carry
+a `dev` badge on the extensions page and cannot be removed there.
 
 `make dev` also starts a mock GitHub, so the install flow can be tried without GitHub: in the dev container, install
 `edelweiss/testext` under **Settings → Extensions → Install from GitHub**. `make mock-releases` builds the releases
@@ -406,8 +458,10 @@ broken release with a new version.
 ## Security notes
 
 - An extension runs with the rights of the signed-in user, and as root in admin mode. Its UI runs in the shell's page
-  (no sandbox) and its CSS applies to the whole page. Users are told to install only from trusted sources; behave
-  accordingly.
+  (no sandbox). The build scopes its style sheet to its container (see Styles), which keeps extensions from restyling
+  each other by accident; it is not a security boundary, because the shell serves the style sheet as the extension
+  ships it and the extension's code can still change the whole page. Users are told to install only from trusted
+  sources; behave accordingly.
 - edelweissd requires a session for every `/ext/<id>/api` request, and a CSRF token and a same-origin check for every
   request other than GET, HEAD and OPTIONS (WebSocket connections get the same-origin check). The extension still
   validates every input.

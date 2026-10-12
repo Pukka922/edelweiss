@@ -6,3 +6,15 @@
 }
 /* SDK components are rendered by the shell and by extensions; their classes must be in the shell CSS. */
 @source "../../sdk/src";
+/*
+ * Shell-only utilities. Extension style sheets share the utilities layer and come later in it, so an extension that
+ * emits sr-only or p-4 overrides the shell's sm:not-sr-only and lg:p-6 on the same element. A shell element must
+ * therefore not pair a base utility with a variant of the same property; it carries one of these names instead, which
+ * nothing outside the shell emits.
+ */
+@utility shell-label {
+  @apply sr-only sm:not-sr-only;
+}
+@utility shell-main {
+  @apply p-4 lg:p-6;
+}

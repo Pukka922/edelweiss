@@ -5,7 +5,7 @@ const (
 	// APIVersion is the extension contract version implemented by this SDK.
 	APIVersion = 1
 	// Version is the SDK version, reported as sdkVersion in the manifest.
-	Version = "0.1.0"
+	Version = "0.2.0"
 
 	HeaderUser      = "X-Edelweiss-User"
 	HeaderUID       = "X-Edelweiss-Uid"

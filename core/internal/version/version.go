@@ -2,5 +2,5 @@
 package version
 
 // Version is overridden at build time:
-// -ldflags "-X github.com/Pukka922/edelweiss/core/internal/version.Version=0.1.0"
-var Version = "0.1.0-dev"
+// -ldflags "-X github.com/Pukka922/edelweiss/core/internal/version.Version=0.2.0"
+var Version = "0.2.0-dev"

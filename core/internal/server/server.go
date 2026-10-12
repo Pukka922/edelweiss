@@ -71,6 +71,11 @@ type Deps struct {
 	Logger    *slog.Logger
 	Hostname  func() string
 	Timeouts  Timeouts // zero fields: the defaults
+
+	Power      Power         // restarts or shuts down the host; nil answers 503 power_unavailable
+	PowerDelay time.Duration // how long after the answer Power runs (the daemon: 1 s)
+
+	Now func() time.Time // the clock of the update cache; nil: time.Now
 }
 
 // Timeouts bound how long a client may hold a connection without progress.
@@ -93,8 +98,9 @@ const (
 
 // Server holds the state shared by the HTTP handlers.
 type Server struct {
-	d     Deps
-	shell *shell
+	d       Deps
+	shell   *shell
+	updates updatesCache
 }
 
 const (
@@ -165,6 +171,8 @@ func New(d Deps) (*fiber.App, error) {
 	app.Post("/api/extensions/install", s.requireSession, s.csrf, s.requireAdminMode, s.installExtension)
 	app.Get("/api/extensions/updates", s.requireSession, s.requireAdminMode, s.extensionUpdates)
 	app.Post("/api/extensions/:id/update", s.requireSession, s.csrf, s.requireAdminMode, s.updateExtension)
+	app.Post("/api/system/reboot", s.requireSession, s.csrf, s.requireAdminMode, s.power("reboot"))
+	app.Post("/api/system/poweroff", s.requireSession, s.csrf, s.requireAdminMode, s.power("poweroff"))
 	app.All("/api/*", func(c fiber.Ctx) error { return fiber.ErrNotFound })
 	app.All("/ext/:id/api/*", s.requireSession, s.csrf, s.extAPI)
 	app.All("/ext/:id/ui/*", s.requireSession, s.extUI)

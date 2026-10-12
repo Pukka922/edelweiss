@@ -38,13 +38,46 @@ export interface UpdateCheckError {
 export interface UpdateCheck {
   updates: Update[];
   errors: UpdateCheckError[];
+  /** When the core asked GitHub (RFC 3339); an answer from the core cache carries the time of the check it keeps. */
+  checkedAt: string;
+  /** The age of that check in seconds by the clock of the core: the clock of the browser may be wrong. */
+  ageSeconds: number;
+  /** GitHub did not answer: updates and errors are those of the last good check, made at checkedAt. */
+  stale: boolean;
+  /** Why it did not answer (the error code and its message); only when stale. */
+  staleCode?: string;
+  staleReason?: string;
+}
+
+/**
+ * Remembers the update check whose errors were shown, for as long as the shell lives: the core answers from its cache
+ * for 2 minutes, also to the page that is visited again, and the same errors are not news again.
+ */
+export interface CheckMemory {
+  /** True the first time it is asked about this checkedAt. */
+  isNew(checkedAt: string): boolean;
+}
+
+export function createCheckMemory(): CheckMemory {
+  let last = "";
+  return {
+    isNew(checkedAt) {
+      if (checkedAt === last) return false;
+      last = checkedAt;
+      return true;
+    },
+  };
 }
 
 /** The core's installer routes (/api/extensions/…); all of them need admin mode. */
 export interface InstallerApi {
   resolve(source: string): Promise<Resolution>;
   install(source: string, id: string, sha256: string): Promise<ExtensionInfo>;
-  updates(): Promise<UpdateCheck>;
+  /**
+   * Looks for updates. Without refresh the core may answer from its cache of the last check (2 minutes, so that the
+   * page does not run into GitHub rate limit); with refresh it always asks GitHub.
+   */
+  updates(refresh?: boolean): Promise<UpdateCheck>;
   /**
    * Updates to the latest release. sha256 is the checksum the user confirmed; the core refuses with
    * 409 release_changed if the latest release has another one.
@@ -56,7 +89,7 @@ export function createInstallerApi(api: ApiClient): InstallerApi {
   return {
     resolve: (source) => api.post<Resolution>("/extensions/resolve", { source }),
     install: (source, id, sha256) => api.post<ExtensionInfo>("/extensions/install", { source, id, sha256 }),
-    updates: () => api.get<UpdateCheck>("/extensions/updates"),
+    updates: (refresh) => api.get<UpdateCheck>(`/extensions/updates${refresh ? "?refresh=1" : ""}`),
     update: (id, sha256) =>
       api.post<ExtensionInfo>(`/extensions/${encodeURIComponent(id)}/update`, { sha256 }),
   };
@@ -72,6 +105,7 @@ const KNOWN_CODES = new Set([
   "asset_too_large",
   "github_rate_limited",
   "github_unavailable",
+  "timeout",
   "operation_in_progress",
   "invalid_extension",
   "id_required",

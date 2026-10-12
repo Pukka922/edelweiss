@@ -7,6 +7,7 @@ import {
   type ExtensionInfo,
   type ExtensionModule,
   extensionContextFor,
+  extensionScopeClass,
   type I18n,
   isExtensionModule,
   LOCALES,
@@ -148,9 +149,12 @@ export function ExtensionHost(props: { loader?: ModuleLoader }) {
       <Match when={module.state === "ready" ? module() : undefined} keyed>
         {(mod) => (
           <ExtensionContext.Provider value={extensionContextFor(params.ext)}>
-            <ErrorBoundary fallback={(err, reset) => <ErrorAlert error={err} onRetry={reset} />}>
-              <Dynamic component={mod.component} />
-            </ErrorBoundary>
+            {/* the extension's style sheet is scoped to this element (SDK 0.2.0) */}
+            <div class={extensionScopeClass(params.ext)}>
+              <ErrorBoundary fallback={(err, reset) => <ErrorAlert error={err} onRetry={reset} />}>
+                <Dynamic component={mod.component} />
+              </ErrorBoundary>
+            </div>
           </ExtensionContext.Provider>
         )}
       </Match>

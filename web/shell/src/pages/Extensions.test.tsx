@@ -4,7 +4,7 @@ import { cleanup, fireEvent, waitFor, within } from "@solidjs/testing-library";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { json } from "../test/fake-fetch";
 import { ext, noUpdates } from "../test/fixtures";
-import { mount, settle } from "../test/mount";
+import { mount, remount, settle } from "../test/mount";
 import { ExtensionsPage } from "./Extensions";
 
 beforeAll(() => {
@@ -61,7 +61,14 @@ const UPDATE = {
   asset: "edelweiss-ext-hello_0.2.0_linux_amd64.tar.gz",
   sha256: SUM,
 };
-const offerUpdate = () => json(200, { updates: [UPDATE], errors: [] });
+const offerUpdate = () =>
+  json(200, {
+    updates: [UPDATE],
+    errors: [],
+    checkedAt: new Date().toISOString(),
+    ageSeconds: 0,
+    stale: false,
+  });
 
 const admin = () => json(200, sessionInfo({ admin: true }));
 const leaveAdmin = () => json(200, sessionInfo({ admin: false }));
@@ -111,7 +118,7 @@ describe("extensions page: list", () => {
 
   it("warns about missing packages with the command that installs them", async () => {
     const docker: ExtensionInfo = {
-      ...ext("docker", "containers", 10, "Docker"),
+      ...ext("docker", "virtualization", 10, "Docker"),
       requires: { apk: ["docker"] },
       missingPackages: ["docker"],
     };
@@ -126,6 +133,30 @@ describe("extensions page: list", () => {
     const warning = view.getByText(/Missing packages: docker/).closest(".alert-warning");
     expect(warning?.textContent).toContain("apk add docker");
     expect(view.container.querySelector(".text-warning")).toBeNull();
+  });
+
+  it("offers the removal as a trash icon with a tooltip and the extension's name for assistive technology", async () => {
+    const view = await open({
+      "GET /api/session": admin,
+      "GET /api/extensions": () => json(200, { extensions: [ext("docker", "virtualization", 10, "Docker")] }),
+      "GET /api/extensions/updates": noUpdates,
+    });
+    const remove = view.getByRole("button", { name: "Remove Docker" }) as HTMLButtonElement;
+    expect(remove.disabled).toBe(false);
+    // text-error beats daisyUI's disabled colour, so the disabled state needs its own look
+    expect(remove.classList.contains("disabled:opacity-40")).toBe(true);
+    const icon = remove.querySelector("svg");
+    expect(icon).not.toBeNull();
+    expect(icon?.getAttribute("width")).toBe("18");
+    expect(icon?.getAttribute("stroke-width")).toBe("1.75");
+    expect(remove.textContent?.trim()).toBe("");
+    expect(remove.parentElement?.classList.contains("tooltip")).toBe(true);
+    expect(remove.parentElement?.getAttribute("data-tip")).toBe("Remove");
+    // the bubble opens to the left and does not wrap: centred above the button in the last cell it would reach beyond
+    // the scroll box of the table (an invisible bubble still counts) and show a horizontal scrollbar
+    for (const cls of ["tooltip-left", "before:max-w-none", "before:whitespace-nowrap"]) {
+      expect(remove.parentElement?.classList.contains(cls), cls).toBe(true);
+    }
   });
 });
 
@@ -399,7 +430,7 @@ describe("extensions page: updates", () => {
     fireEvent.click(view.getByRole("button", { name: "Update" }));
 
     const button = (name: string) => view.getByRole("button", { name }) as HTMLButtonElement;
-    await waitFor(() => expect(button("Remove").disabled).toBe(true));
+    await waitFor(() => expect(button("Remove Hello").disabled).toBe(true));
     expect(button("Update to 0.2.0").disabled).toBe(true);
     expect(button("Update").disabled).toBe(true);
     expect(button("Update").querySelector(".loading")).not.toBeNull();
@@ -415,7 +446,7 @@ describe("extensions page: updates", () => {
     answer.resolve(json(200, hello("0.2.0")));
     await waitFor(() => expect(toasts(view)).toEqual(["Hello was updated to 0.2.0."]));
     expect(view.queryByRole("dialog")).toBeNull();
-    await waitFor(() => expect(button("Remove").disabled).toBe(false));
+    await waitFor(() => expect(button("Remove Hello").disabled).toBe(false));
   });
 
   it("closes the confirmation when admin mode ends", async () => {
@@ -433,15 +464,22 @@ describe("extensions page: updates", () => {
   });
 
   it("reports an update the core refuses because the release changed and offers the current one", async () => {
-    let checks = 0;
+    // the core keeps its last check for 2 minutes: only a check with refresh=1 sees the release as it is now
+    const current = () => {
+      const newer = { ...UPDATE, available: "0.3.0", tag: "v0.3.0", sha256: NEWER_SUM };
+      return json(200, {
+        updates: [newer],
+        errors: [],
+        checkedAt: new Date().toISOString(),
+        ageSeconds: 0,
+        stale: false,
+      });
+    };
     const view = await open({
       "GET /api/session": admin,
       "GET /api/extensions": () => json(200, { extensions: [hello("0.1.0")] }),
-      "GET /api/extensions/updates": () => {
-        checks++;
-        const newer = { ...UPDATE, available: "0.3.0", tag: "v0.3.0", sha256: NEWER_SUM };
-        return json(200, { updates: [checks === 1 ? UPDATE : newer], errors: [] });
-      },
+      "GET /api/extensions/updates": offerUpdate, // the kept check, with the old checksum
+      "GET /api/extensions/updates?refresh=1": current,
       "POST /api/extensions/hello/update": () =>
         json(409, { error: { code: "release_changed", message: "the release has another checksum" } }),
     });
@@ -455,10 +493,14 @@ describe("extensions page: updates", () => {
     expect(toasts(view)).toEqual([]);
     expect(view.shell.extensions.list().map((e) => e.version)).toEqual(["0.1.0"]);
 
-    // the entry with the old checksum is gone: the release as it is now is offered
+    // the entry with the old checksum is gone: the release as it is now is offered, found out on GitHub
     expect(await view.findByRole("button", { name: "Update to 0.3.0" })).toBeTruthy();
     expect(view.queryByRole("button", { name: "Update to 0.2.0" })).toBeNull();
-    expect(checks).toBe(2);
+    const checks = view.fetch.calls.filter((c) => c.url.startsWith("/api/extensions/updates"));
+    expect(checks.map((c) => c.url)).toEqual([
+      "/api/extensions/updates",
+      "/api/extensions/updates?refresh=1",
+    ]);
   });
 
   it("keeps the dialog open and names the missing packages when the core refuses an update for them", async () => {
@@ -466,6 +508,7 @@ describe("extensions page: updates", () => {
       "GET /api/session": admin,
       "GET /api/extensions": () => json(200, { extensions: [hello("0.1.0")] }),
       "GET /api/extensions/updates": offerUpdate,
+      "GET /api/extensions/updates?refresh=1": offerUpdate,
       "POST /api/extensions/hello/update": () =>
         json(422, {
           error: { code: "missing_packages", message: "missing packages: docker", packages: ["docker"] },
@@ -501,6 +544,7 @@ describe("extensions page: updates", () => {
         "GET /api/session": admin,
         "GET /api/extensions": () => json(200, { extensions: [hello("0.1.0")] }),
         "GET /api/extensions/updates": offerUpdate,
+        "GET /api/extensions/updates?refresh=1": offerUpdate,
         "POST /api/extensions/hello/update": refuse,
       });
       fireEvent.click(await view.findByRole("button", { name: "Update to 0.2.0" }));
@@ -523,6 +567,7 @@ describe("extensions page: updates", () => {
         "GET /api/session": admin,
         "GET /api/extensions": () => json(200, { extensions: [hello(version)] }),
         "GET /api/extensions/updates": () => (version === "0.1.0" ? offerUpdate() : noUpdates()),
+        "GET /api/extensions/updates?refresh=1": () => (version === "0.1.0" ? offerUpdate() : noUpdates()),
         "POST /api/extensions/hello/update": () => (++attempts === 1 ? refuse() : answer.promise),
       });
       fireEvent.click(await view.findByRole("button", { name: "Update to 0.2.0" }));
@@ -545,6 +590,7 @@ describe("extensions page: updates", () => {
         "GET /api/session": admin,
         "GET /api/extensions": () => json(200, { extensions: [hello("0.1.0")] }),
         "GET /api/extensions/updates": offerUpdate,
+        "GET /api/extensions/updates?refresh=1": offerUpdate,
         "POST /api/extensions/hello/update": refuse,
         "DELETE /api/session/admin": leaveAdmin,
       });
@@ -613,9 +659,320 @@ describe("extensions page: updates", () => {
   });
 });
 
+describe("extensions page: the update check keeps its result", () => {
+  const NOW = new Date("2026-10-12T10:00:00Z");
+  const secondsAgo = (n: number) => new Date(NOW.getTime() - n * 1000);
+  const minutesAgo = (n: number) => secondsAgo(n * 60);
+  // how the stale note names the time of the kept check: date and time, in the language of the shell
+  const stamp = (d: Date, locale = "en") =>
+    new Intl.DateTimeFormat(locale, { dateStyle: "short", timeStyle: "short" }).format(d);
+  const extensions = () => json(200, { extensions: [hello("0.1.0")] });
+  /** The requests the page made for the update check, with their query. */
+  const checkCalls = (view: View) =>
+    view.fetch.calls.filter((c) => c.url.startsWith("/api/extensions/updates")).map((c) => c.url);
+  /** The core's answer to a check that was made at checkedAt; the core says how old it is by its own clock (NOW). */
+  const checkedAt = (at: Date, extra: Record<string, unknown> = {}) =>
+    json(200, {
+      updates: [],
+      errors: [],
+      checkedAt: at.toISOString(),
+      ageSeconds: Math.max(0, Math.round((NOW.getTime() - at.getTime()) / 1000)),
+      stale: false,
+      ...extra,
+    });
+  const staleAnswer = (staleCode = "github_rate_limited", staleReason = "GitHub API rate limit exceeded") =>
+    checkedAt(minutesAgo(7), { updates: [UPDATE], stale: true, staleCode, staleReason });
+  const hint = (view: View) => view.container.querySelector(".alert-warning");
+  const errorOfDocker = { id: "docker", code: "release_not_found", message: "acme/docker has no release" };
+  const toastOfDocker =
+    "Could not check docker for updates: No release was found for this repository or tag.";
+
+  /** Runs test with the clock of the browser (Date.now) standing at the given time, by default at NOW. */
+  async function atNow(test: () => Promise<void>, browserTime = NOW.getTime()) {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(browserTime);
+    try {
+      await test();
+    } finally {
+      clock.mockRestore();
+    }
+  }
+
+  it("asks the core without refresh when it opens and with refresh when the button is pressed", async () => {
+    const view = await open({
+      "GET /api/session": admin,
+      "GET /api/extensions": extensions,
+      "GET /api/extensions/updates": noUpdates,
+      "GET /api/extensions/updates?refresh=1": noUpdates,
+    });
+    expect(checkCalls(view)).toEqual(["/api/extensions/updates"]);
+    fireEvent.click(view.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() =>
+      expect(checkCalls(view)).toEqual(["/api/extensions/updates", "/api/extensions/updates?refresh=1"]),
+    );
+  });
+
+  const HOUR = 3600;
+  const DAY = 24 * HOUR;
+  it.each([
+    [0, "Checked just now"],
+    [59, "Checked just now"],
+    [60, "Checked 1 minute ago"],
+    [3 * 60, "Checked 3 minutes ago"],
+    [59 * 60 + 59, "Checked 59 minutes ago"],
+    // from an hour on the page counts in hours, from a day on in days (the last good result can be that old)
+    [HOUR, "Checked 1 hour ago"],
+    [75 * 60, "Checked 1 hour ago"],
+    [5 * HOUR + 1800, "Checked 5 hours ago"],
+    [DAY - 1, "Checked 23 hours ago"],
+    [DAY, "Checked yesterday"],
+    [3 * DAY + 5 * HOUR, "Checked 3 days ago"],
+  ])("shows a check that is %i seconds old as %s", (seconds, text) =>
+    atNow(async () => {
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": () => checkedAt(secondsAgo(seconds)),
+      });
+      expect(view.getByText(text)).toBeTruthy();
+    }),
+  );
+
+  it("tells the age in the language of the shell", () =>
+    atNow(async () => {
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": () => checkedAt(minutesAgo(3)),
+      });
+      view.shell.setLocale("de");
+      await settle();
+      expect(view.getByText("Geprüft vor 3 Minuten")).toBeTruthy();
+    }));
+
+  it.each([
+    [90 * 60, "Geprüft vor 1 Stunde"],
+    [5 * HOUR, "Geprüft vor 5 Stunden"],
+    [DAY, "Geprüft gestern"],
+    [3 * DAY, "Geprüft vor 3 Tagen"],
+  ])("tells an age of %i seconds in hours and days in German: %s", (seconds, text) =>
+    atNow(async () => {
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": () => checkedAt(secondsAgo(seconds)),
+      });
+      view.shell.setLocale("de");
+      await settle();
+      expect(view.getByText(text)).toBeTruthy();
+    }),
+  );
+
+  it("shows no age before the first check and forgets it when admin mode ends", () =>
+    atNow(async () => {
+      const unchecked = await open({
+        "GET /api/session": () => json(200, sessionInfo({ admin: false, canAdmin: true })),
+        "GET /api/extensions": extensions,
+      });
+      expect(unchecked.queryByText(/^Checked/)).toBeNull();
+      cleanup();
+
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": () => checkedAt(NOW),
+        "DELETE /api/session/admin": leaveAdmin,
+      });
+      expect(view.getByText("Checked just now")).toBeTruthy();
+      await view.shell.session.disableAdmin();
+      await settle();
+      expect(view.queryByText(/^Checked/)).toBeNull();
+    }));
+
+  it("keeps the age up to date while the page is open and stops doing so when it is closed", async () => {
+    vi.useFakeTimers({ toFake: ["setInterval", "clearInterval", "Date"] });
+    try {
+      vi.setSystemTime(NOW);
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": () => checkedAt(NOW),
+      });
+      expect(view.getByText("Checked just now")).toBeTruthy();
+      vi.advanceTimersByTime(3 * 60_000);
+      expect(view.getByText("Checked 3 minutes ago")).toBeTruthy();
+      expect(vi.getTimerCount()).toBe(1);
+      cleanup();
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("shows the last result with a note when GitHub does not answer", () =>
+    atNow(async () => {
+      let fresh = false;
+      const answer = () => (fresh ? checkedAt(NOW) : staleAnswer());
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": answer,
+        "GET /api/extensions/updates?refresh=1": answer,
+      });
+      expect(hint(view)?.textContent).toBe(
+        `GitHub does not answer right now (GitHub's request limit is reached. Try again later or configure a token); shown is the check of ${stamp(minutesAgo(7))}.`,
+      );
+      expect(view.getByText("Checked 7 minutes ago")).toBeTruthy();
+      expect(view.getByRole("button", { name: "Update to 0.2.0" })).toBeTruthy(); // the last result is still offered
+
+      fresh = true; // GitHub answers again
+      fireEvent.click(view.getByRole("button", { name: "Check for updates" }));
+      await waitFor(() => expect(hint(view)).toBeNull());
+      expect(view.queryByRole("button", { name: "Update to 0.2.0" })).toBeNull();
+      expect(view.getByText("Checked just now")).toBeTruthy();
+    }));
+
+  it.each([
+    ["github_unavailable", "dial tcp: refused", "GitHub could not be reached: dial tcp: refused"],
+    ["timeout", "context deadline exceeded", "GitHub did not answer in time. Try again in a moment"],
+    ["something_new", "the message of the core", "the message of the core"], // a code the shell does not know
+  ])("tells why GitHub does not answer in its own words: %s", (code, message, reason) =>
+    atNow(async () => {
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": () => staleAnswer(code, message),
+      });
+      expect(hint(view)?.textContent).toBe(
+        `GitHub does not answer right now (${reason}); shown is the check of ${stamp(minutesAgo(7))}.`,
+      );
+    }),
+  );
+
+  it("tells why GitHub does not answer in German", () =>
+    atNow(async () => {
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": () => staleAnswer(),
+      });
+      view.shell.setLocale("de");
+      await settle();
+      expect(hint(view)?.textContent).toBe(
+        `GitHub antwortet gerade nicht (Das Anfragelimit von GitHub ist erreicht. Versuche es später oder hinterlege einen Token); angezeigt ist die Prüfung von ${stamp(minutesAgo(7), "de")}.`,
+      );
+    }));
+
+  // the kept result can be from another day: the note names the date with the time, in the language of the shell
+  it.each([
+    ["en", "shown is the check of ", /check of \d{1,2}\/\d{1,2}\/\d{2}, \d{1,2}:\d{2}/],
+    ["de", "angezeigt ist die Prüfung von ", /Prüfung von \d{1,2}\.\d{1,2}\.\d{2}, \d{2}:\d{2}\.$/],
+  ])("names the date and the time of the kept check in the stale note (%s)", (locale, lead, shape) =>
+    atNow(async () => {
+      const kept = new Date(NOW.getTime() - 2 * DAY - 25 * 60_000); // two days and 25 minutes ago
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": () => checkedAt(kept, { updates: [UPDATE], stale: true }),
+      });
+      view.shell.setLocale(locale as "en" | "de");
+      await settle();
+      const text = hint(view)?.textContent ?? "";
+      expect(text).toMatch(shape);
+      expect(text.endsWith(`${lead}${stamp(kept, locale)}.`)).toBe(true);
+    }),
+  );
+
+  // the core says how old a check is: a browser clock that is wrong makes no difference
+  it.each([
+    ["ahead", 3 * 3600_000],
+    ["behind", -3 * 3600_000],
+  ])("shows the age of the check by the core even when the browser clock is %s", (_name, offset) =>
+    atNow(async () => {
+      const view = await open({
+        "GET /api/session": admin,
+        "GET /api/extensions": extensions,
+        "GET /api/extensions/updates": () => checkedAt(minutesAgo(2)),
+      });
+      expect(view.getByText("Checked 2 minutes ago")).toBeTruthy();
+    }, NOW.getTime() + offset),
+  );
+
+  it("asks GitHub for the check that follows the admin prompt of the button", async () => {
+    const view = await open({
+      "GET /api/session": () => json(200, sessionInfo({ admin: false, canAdmin: true })),
+      "GET /api/extensions": extensions,
+      "GET /api/extensions/updates": noUpdates,
+      "GET /api/extensions/updates?refresh=1": noUpdates,
+      "POST /api/session/admin": admin,
+    });
+    fireEvent.click(view.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => expect(view.shell.session.adminRequested()).toBe(true));
+    await view.shell.session.enableAdmin("pw");
+    await settle();
+    expect(checkCalls(view)).toEqual(["/api/extensions/updates?refresh=1"]);
+  });
+
+  it("does not ask GitHub for the check of an admin mode that comes on later, after the prompt was declined", async () => {
+    const view = await open({
+      "GET /api/session": () => json(200, sessionInfo({ admin: false, canAdmin: true })),
+      "GET /api/extensions": extensions,
+      "GET /api/extensions/updates": noUpdates,
+      "GET /api/extensions/updates?refresh=1": noUpdates,
+      "POST /api/session/admin": admin,
+    });
+    fireEvent.click(view.getByRole("button", { name: "Check for updates" }));
+    await waitFor(() => expect(view.shell.session.adminRequested()).toBe(true));
+    view.shell.session.answerAdminRequest(false);
+    await settle();
+    await view.shell.session.enableAdmin("pw");
+    await settle();
+    expect(checkCalls(view)).toEqual(["/api/extensions/updates"]);
+  });
+
+  it("toasts the errors of a check once, not again when the core answers from its cache", async () => {
+    let at = minutesAgo(1);
+    const answer = () => checkedAt(at, { errors: [errorOfDocker] });
+    const view = await open({
+      "GET /api/session": admin,
+      "GET /api/extensions": extensions,
+      "GET /api/extensions/updates": answer,
+      "GET /api/extensions/updates?refresh=1": answer,
+    });
+    expect(toasts(view)).toEqual([toastOfDocker]);
+
+    // the same check comes back (checkedAt unchanged): its errors were shown already
+    fireEvent.click(view.getByRole("button", { name: "Check for updates" }));
+    await settle();
+    expect(checkCalls(view)).toHaveLength(2);
+    expect(toasts(view)).toEqual([toastOfDocker]);
+
+    // a new check with the same error is news again
+    at = NOW;
+    fireEvent.click(view.getByRole("button", { name: "Check for updates" }));
+    await settle();
+    expect(checkCalls(view)).toHaveLength(3);
+    expect(toasts(view)).toEqual([toastOfDocker, toastOfDocker]);
+  });
+
+  it("does not toast the errors of a cached check again when the page is visited again", async () => {
+    const answer = () => checkedAt(minutesAgo(1), { errors: [errorOfDocker] });
+    const view = await open({
+      "GET /api/session": admin,
+      "GET /api/extensions": extensions,
+      "GET /api/extensions/updates": answer,
+    });
+    expect(toasts(view)).toEqual([toastOfDocker]);
+
+    const again = remount(view, () => <ExtensionsPage />);
+    await settle();
+    expect(checkCalls(again)).toHaveLength(2); // the page that came back asked, and got the same check from the cache
+    expect(toasts(again)).toEqual([toastOfDocker]);
+  });
+});
+
 describe("extensions page: remove", () => {
   const confirmRemove = async (view: View) => {
-    fireEvent.click(view.getByRole("button", { name: "Remove" }));
+    fireEvent.click(view.getByRole("button", { name: "Remove Hello" }));
     const dialog = await view.findByRole("dialog", { name: "Remove extension" });
     expect(dialog.textContent).toContain("Its running processes will be stopped and its data deleted.");
     fireEvent.click(within(dialog).getByRole("button", { name: "Remove" }));
@@ -635,7 +992,7 @@ describe("extensions page: remove", () => {
     });
     await confirmRemove(view);
     await waitFor(() => expect(toasts(view)).toEqual(["Hello was removed."]));
-    expect(view.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(view.queryByRole("button", { name: "Remove Hello" })).toBeNull();
   });
 
   it("shows the answer when only the data directory could not be deleted, and drops the extension from the list", async () => {
@@ -654,7 +1011,7 @@ describe("extensions page: remove", () => {
     await confirmRemove(view);
     // the message says what happened; "Could not remove Hello: the extension was removed" would contradict itself
     await waitFor(() => expect(toasts(view)).toEqual([message]));
-    expect(view.queryByRole("button", { name: "Remove" })).toBeNull();
+    expect(view.queryByRole("button", { name: "Remove Hello" })).toBeNull();
   });
 
   it("names an extension that could not be removed at all", async () => {
@@ -667,6 +1024,6 @@ describe("extensions page: remove", () => {
     });
     await confirmRemove(view);
     await waitFor(() => expect(toasts(view)).toEqual(["Could not remove Hello: could not remove extension"]));
-    expect(view.getByRole("button", { name: "Remove" })).toBeTruthy();
+    expect(view.getByRole("button", { name: "Remove Hello" })).toBeTruthy();
   });
 });

@@ -8,6 +8,7 @@ import (
 	"crypto/tls"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -564,5 +565,98 @@ func TestWatchSelfSignedLogsRenewalOnce(t *testing.T) {
 	}
 	if n := strings.Count(logs.String(), "restart edelweissd"); n != 1 {
 		t.Fatalf("restart hint logged %d times:\n%s", n, logs.String())
+	}
+}
+
+// recordingRunner is the commandRunner of the host power tests: it records what it is asked to run and runs nothing.
+// These tests never reach a real command, whatever hostPower does.
+type recordingRunner struct {
+	calls []string
+	out   string
+	err   error
+}
+
+func (r *recordingRunner) run(name string, args ...string) ([]byte, error) {
+	r.calls = append(r.calls, strings.Join(append([]string{name}, args...), " "))
+	return []byte(r.out), r.err
+}
+
+func quietLogger(logs *syncBuffer) *slog.Logger { return slog.New(slog.NewTextHandler(logs, nil)) }
+
+// In the development environment (serve --dev) the host's Power only logs: the dev container must never restart or
+// stop the machine of the developer. What [dev] holds does not matter: --dev alone decides.
+func TestHostPowerOnlyLogsInDevMode(t *testing.T) {
+	for name, dev := range map[string]config.Dev{
+		"an empty [dev] section": {Enabled: true},
+		"a shell directory":      {Enabled: true, ShellDir: "/work/web/shell/dist"},
+		"an extension": {Enabled: true,
+			Extensions: []config.DevExtension{{Binary: "/work/ext/ext", UIDir: "/work/ext/ui/dist"}}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			cfg := config.Default()
+			cfg.Dev = dev
+			var logs syncBuffer
+			rec := &recordingRunner{}
+			power := hostPower(cfg, quietLogger(&logs), rec.run)
+			for _, action := range []string{"reboot", "poweroff"} {
+				if err := power(action); err != nil {
+					t.Fatalf("%s: %v", action, err)
+				}
+				if want := "dev mode: the host would " + action + " now"; !strings.Contains(logs.String(), want) {
+					t.Fatalf("no %q in the log:\n%s", want, logs.String())
+				}
+			}
+			if len(rec.calls) != 0 {
+				t.Fatalf("dev mode ran %v", rec.calls)
+			}
+		})
+	}
+}
+
+// Outside the development environment the two fixed absolute commands run. The guard follows Dev.Enabled (the --dev
+// flag) and nothing else: [dev] settings alone do not switch it on (cli drops them without --dev anyway).
+func TestHostPowerRunsTheFixedCommandsOutsideDevMode(t *testing.T) {
+	for action, command := range map[string]string{"reboot": "/sbin/reboot", "poweroff": "/sbin/poweroff"} {
+		cfg := config.Default()
+		cfg.Dev = config.Dev{ShellDir: "/work/web/shell/dist"} // not Enabled
+		rec := &recordingRunner{}
+		if err := hostPower(cfg, quietLogger(&syncBuffer{}), rec.run)(action); err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+		if len(rec.calls) != 1 || rec.calls[0] != command {
+			t.Fatalf("%s ran %v, want exactly %q", action, rec.calls, command)
+		}
+	}
+}
+
+func TestHostPowerRefusesOtherActions(t *testing.T) {
+	for _, dev := range []bool{false, true} {
+		for _, action := range []string{"", "halt", "REBOOT", "reboot -f", "/sbin/reboot", "../sbin/poweroff", "rm"} {
+			cfg := config.Default()
+			cfg.Dev.Enabled = dev
+			rec := &recordingRunner{}
+			if err := hostPower(cfg, quietLogger(&syncBuffer{}), rec.run)(action); err == nil {
+				t.Fatalf("dev=%v: %q was accepted", dev, action)
+			}
+			if len(rec.calls) != 0 {
+				t.Fatalf("dev=%v: %q ran %v", dev, action, rec.calls)
+			}
+		}
+	}
+}
+
+func TestHostPowerReportsAFailureWithTheOutputOfTheCommand(t *testing.T) {
+	failure := errors.New("exit status 1")
+	rec := &recordingRunner{out: "reboot: must be run as root\n", err: failure}
+	err := hostPower(config.Default(), quietLogger(&syncBuffer{}), rec.run)("reboot")
+	if !errors.Is(err, failure) || !strings.Contains(err.Error(), "/sbin/reboot") ||
+		!strings.Contains(err.Error(), "reboot: must be run as root") || strings.HasSuffix(err.Error(), "\n") {
+		t.Fatalf("error %v", err)
+	}
+
+	rec = &recordingRunner{err: failure} // no output: just the error
+	err = hostPower(config.Default(), quietLogger(&syncBuffer{}), rec.run)("poweroff")
+	if !errors.Is(err, failure) || err.Error() != "/sbin/poweroff: exit status 1" {
+		t.Fatalf("error %v", err)
 	}
 }

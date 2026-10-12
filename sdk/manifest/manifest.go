@@ -51,7 +51,7 @@ type Manifest struct {
 }
 
 // Sections are the allowed menu sections.
-var Sections = []string{"system", "storage", "containers", "network", "tools", "other"}
+var Sections = []string{"system", "storage", "virtualization", "network", "tools", "other"}
 
 // SupportedAPIVersions lists the contract versions this code understands.
 var SupportedAPIVersions = []int{1}
@@ -89,6 +89,10 @@ func Parse(data []byte) (*Manifest, error) {
 	var m Manifest
 	if err := json.Unmarshal(data, &m); err != nil {
 		return nil, fmt.Errorf("manifest: invalid JSON: %w", err)
+	}
+	// containers is the old name of the section virtualization (edelweiss 0.1.0): installed extensions keep their place
+	if m.Menu.Section == "containers" {
+		m.Menu.Section = "virtualization"
 	}
 	if err := m.Validate(); err != nil {
 		return nil, err

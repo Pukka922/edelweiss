@@ -52,16 +52,27 @@ export interface ConfirmDialogProps {
   message: string;
   confirmLabel?: string;
   danger?: boolean;
+  /** True while what the dialog confirmed is being done: both buttons are disabled (the confirm one spins) and Escape and the backdrop do nothing. */
+  busy?: boolean;
   onConfirm: () => void;
   onCancel: () => void;
 }
 
-/** The open dialog. Every opening focuses Cancel, the safe choice; Escape and the backdrop cancel. */
+/**
+ * The open dialog. Every opening focuses Cancel, the safe choice; Escape and the backdrop cancel, unless the dialog is
+ * busy.
+ */
 function ConfirmPrompt(props: Omit<ConfirmDialogProps, "open">): JSX.Element {
   const { t } = useI18n("sdk");
   let cancelButton: HTMLButtonElement | undefined;
+  const cancel = () => {
+    if (!props.busy) props.onCancel();
+  };
+  const confirm = () => {
+    if (!props.busy) props.onConfirm();
+  };
   const onKeyDown = (e: KeyboardEvent) => {
-    if (e.key === "Escape") props.onCancel();
+    if (e.key === "Escape") cancel();
   };
   onMount(() => {
     cancelButton?.focus();
@@ -74,19 +85,24 @@ function ConfirmPrompt(props: Omit<ConfirmDialogProps, "open">): JSX.Element {
         <h3 class="text-lg font-bold">{props.title}</h3>
         <p class="py-4">{props.message}</p>
         <div class="modal-action">
-          <button ref={cancelButton} type="button" class="btn" onClick={() => props.onCancel()}>
+          <button ref={cancelButton} type="button" class="btn" disabled={props.busy} onClick={cancel}>
             {t("confirm.cancel")}
           </button>
           <button
             type="button"
             class={props.danger ? "btn btn-error" : "btn btn-primary"}
-            onClick={() => props.onConfirm()}
+            disabled={props.busy}
+            aria-busy={props.busy}
+            onClick={confirm}
           >
+            <Show when={props.busy}>
+              <span class="loading loading-spinner loading-xs" aria-hidden="true" />
+            </Show>
             {props.confirmLabel ?? t("confirm.confirm")}
           </button>
         </div>
       </div>
-      <div class="modal-backdrop" aria-hidden="true" onClick={() => props.onCancel()} />
+      <div class="modal-backdrop" aria-hidden="true" onClick={cancel} />
     </div>
   );
 }
@@ -99,6 +115,7 @@ export function ConfirmDialog(props: ConfirmDialogProps): JSX.Element {
         message={props.message}
         confirmLabel={props.confirmLabel}
         danger={props.danger}
+        busy={props.busy}
         onConfirm={props.onConfirm}
         onCancel={props.onCancel}
       />

@@ -103,6 +103,11 @@ func (s *Server) extensionUpdates(c fiber.Ctx) error {
 	if err != nil {
 		return err
 	}
+	key := s.updatesKey()
+	cached := s.updates.get(key)
+	if c.Query("refresh") != "1" && cached != nil && s.now().Sub(cached.CheckedAt) < updatesMaxAge {
+		return s.replyUpdates(c, *cached)
+	}
 	ctx, cancel := requestContext(c, 2*resolveTimeout)
 	defer cancel()
 	updates, failed := inst.Updates(ctx)
@@ -116,7 +121,17 @@ func (s *Server) extensionUpdates(c fiber.Ctx) error {
 		}
 		errs = append(errs, updateErrorView{ID: f.ID, Code: code, Message: msg})
 	}
-	return c.JSON(fiber.Map{"updates": updates, "errors": errs})
+	v := updatesView{Updates: updates, Errors: errs, CheckedAt: s.now()}
+	if wide, ok := wideError(errs); ok {
+		// the check is incomplete: it is not kept and does not replace the last good result
+		if cached != nil {
+			cached.Stale, cached.StaleCode, cached.StaleReason = true, wide.Code, wide.Message
+			return s.replyUpdates(c, *cached)
+		}
+		return s.replyUpdates(c, v) // no earlier result to show: the errors, and the next check asks again
+	}
+	s.updates.put(key, v)
+	return s.replyUpdates(c, v)
 }
 
 func (s *Server) updateExtension(c fiber.Ctx) error {

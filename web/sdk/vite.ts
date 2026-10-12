@@ -3,6 +3,8 @@ import path from "node:path";
 import tailwindcss from "@tailwindcss/vite";
 import type { Plugin, PluginOption, UserConfig } from "vite";
 import solid from "vite-plugin-solid";
+import { scopeCss } from "./css-scope";
+import { extensionScopeClass } from "./src/scope";
 
 /** Modules provided by the shell through its import map. */
 export const sharedModules: RegExp[] = [
@@ -19,10 +21,14 @@ export interface ExtensionOptions {
   manifest?: string;
 }
 
-/** Vite setup for an edelweiss extension UI: library build of index.js + style.css into dist/. */
+/**
+ * Vite setup for an edelweiss extension UI: library build of index.js + style.css into dist/. Every CSS file of the
+ * build is scoped to the element the shell renders the extension in (see scopeCss).
+ */
 export function edelweissExtension(options: ExtensionOptions = {}): PluginOption[] {
   const entry = options.entry ?? "src/index.tsx";
   const manifestPath = options.manifest ?? "../manifest.json";
+  let id = "";
   const plugin: Plugin = {
     name: "edelweiss-extension",
     config(_config, env): UserConfig {
@@ -40,11 +46,37 @@ export function edelweissExtension(options: ExtensionOptions = {}): PluginOption
     },
     configResolved(resolved) {
       const file = path.resolve(resolved.root, manifestPath);
-      const problems = checkManifest(JSON.parse(readFileSync(file, "utf8")));
+      const manifest: unknown = JSON.parse(readFileSync(file, "utf8"));
+      const problems = checkManifest(manifest);
       if (problems.length > 0) throw new Error(`edelweiss: invalid ${file}:\n- ${problems.join("\n- ")}`);
+      id = (manifest as { id: string }).id;
     },
   };
-  return [solid(), tailwindcss(), plugin];
+  const scope: Plugin = {
+    name: "edelweiss-extension-css-scope",
+    apply: "build",
+    enforce: "post",
+    // Scopes the extension's style sheet to the element the shell renders it in (see scopeCss); each build, also
+    // every rebuild of vite build --watch, emits its CSS anew, so nothing is scoped twice.
+    generateBundle(_options, bundle) {
+      if (!id) this.error("edelweiss: the extension id is unknown (use edelweissExtension() as a whole)");
+      for (const file of Object.values(bundle)) {
+        if (file.type !== "asset" || !file.fileName.endsWith(".css")) continue;
+        const css = typeof file.source === "string" ? file.source : new TextDecoder().decode(file.source);
+        try {
+          file.source = scopeCss(css, id, file.fileName);
+        } catch (error) {
+          // lightningcss reports where it stopped in loc
+          const { message, loc } = error as { message?: string; loc?: { line: number; column: number } };
+          const position = loc ? ` (line ${loc.line}, column ${loc.column})` : "";
+          this.error(
+            `edelweiss: cannot scope ${file.fileName} to .${extensionScopeClass(id)}: ${message ?? String(error)}${position}`,
+          );
+        }
+      }
+    },
+  };
+  return [solid(), tailwindcss(), plugin, scope];
 }
 
 const record = (v: unknown): Record<string, unknown> =>

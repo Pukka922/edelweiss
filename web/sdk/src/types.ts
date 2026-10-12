@@ -1,7 +1,7 @@
 export type Locale = "de" | "en";
 export const LOCALES: readonly Locale[] = ["de", "en"];
 
-export const SECTIONS = ["system", "storage", "containers", "network", "tools", "other"] as const;
+export const SECTIONS = ["system", "storage", "virtualization", "network", "tools", "other"] as const;
 export type Section = (typeof SECTIONS)[number];
 
 export type Localized = Partial<Record<string, string>>;
