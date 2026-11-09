@@ -32,6 +32,18 @@ type Options struct {
 // safeBinary keeps the path usable inside the double-quoted command= of the init script.
 var safeBinary = regexp.MustCompile(`^/[A-Za-z0-9/._+-]+$`)
 
+// ErrUnsafeBinary is the error for a binary path that cannot be used inside the init script.
+var ErrUnsafeBinary = errors.New("unsafe binary path")
+
+// Script returns the init script for the service that runs binary. The path must be absolute and contain only letters,
+// digits and ./_+-, so that it is safe inside the double-quoted command= of the script.
+func Script(binary string) (string, error) {
+	if !safeBinary.MatchString(binary) {
+		return "", fmt.Errorf("%w: binary path %q must be absolute and contain only letters, digits and ./_+-", ErrUnsafeBinary, binary)
+	}
+	return strings.ReplaceAll(initScript, "@COMMAND@", binary), nil
+}
+
 // lookOpenRC finds one of OpenRC's commands, with a clear error for a system without OpenRC.
 func lookOpenRC(name string) (string, error) {
 	path, err := exec.LookPath(name)
@@ -74,10 +86,11 @@ func Install(o Options) error {
 		}
 	}
 	o = o.withDefaults()
-	if !safeBinary.MatchString(o.Binary) {
-		return fmt.Errorf("binary path %q must be absolute and contain only letters, digits and ./_+-", o.Binary)
+	script, err := Script(o.Binary)
+	if err != nil {
+		return err
 	}
-	if err := o.write(InitScript, strings.ReplaceAll(initScript, "@COMMAND@", o.Binary), 0o755, true); err != nil {
+	if err := o.write(InitScript, script, 0o755, true); err != nil {
 		return err
 	}
 	if err := o.write(ConfD, confD, 0o644, false); err != nil {

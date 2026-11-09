@@ -4,6 +4,7 @@ import { createEffect, Match, onCleanup, Switch } from "solid-js";
 import { AdminDialog } from "./components/AdminDialog";
 import { Layout } from "./components/Layout";
 import { useShell } from "./context";
+import { AboutPage } from "./pages/About";
 import { ExtensionHost, type ModuleLoader } from "./pages/ExtensionHost";
 import { ExtensionsPage } from "./pages/Extensions";
 import { Home } from "./pages/Home";
@@ -53,6 +54,7 @@ export function ShellRoutes(props: { loader?: ModuleLoader }) {
         <Route path="/" component={Home} />
         <Route path="/x/:ext/*rest" component={() => <ExtensionHost loader={props.loader} />} />
         <Route path="/settings/extensions" component={ExtensionsPage} />
+        <Route path="/settings/about" component={AboutPage} />
         <Route path="*404" component={NotFound} />
       </Route>
     </>

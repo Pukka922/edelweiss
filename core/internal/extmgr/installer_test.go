@@ -20,6 +20,8 @@ import (
 	"unicode"
 
 	"github.com/Pukka922/edelweiss/core/internal/github"
+	"github.com/Pukka922/edelweiss/core/internal/oplock"
+	"github.com/Pukka922/edelweiss/core/internal/selfupdate"
 	"github.com/Pukka922/edelweiss/core/internal/testutil"
 )
 
@@ -611,6 +613,37 @@ func TestInstallIsExclusive(t *testing.T) {
 	}
 }
 
+// The helper of a self-update outlives the edelweissd that started it: while it holds its lock, the new process
+// installs and updates nothing, though its shared lock is fresh.
+func TestInstallRefusedWhileSelfUpdateHelperRuns(t *testing.T) {
+	rs := testutil.NewReleaseServer(t)
+	rs.Add("acme/tools", "v1.0.0", withChecksums(map[string][]byte{testutil.AssetName("testext", "1.0.0"): readBin(t, "")}))
+	inst, _ := newInstaller(t, rs)
+	dir := filepath.Join(t.TempDir(), "self-update")
+	inst.busy = oplock.New(func() bool { return selfupdate.HelperRunning(dir) }) // as the daemon builds it
+	held, err := selfupdate.AcquireLock(dir)                                     // the helper's lock, another open file
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if _, err := inst.Install(ctx, InstallRequest{Source: "acme/tools"}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("install while the helper runs: %v", err)
+	}
+	if _, err := inst.Update(ctx, "testext", ""); !errors.Is(err, ErrBusy) {
+		t.Fatalf("update while the helper runs: %v", err)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := inst.Install(ctx, InstallRequest{Source: "acme/tools@v1.0.0"}); err != nil {
+		t.Fatalf("install after the helper ended: %v", err)
+	}
+	rs.Add("acme/tools", "v1.1.0", withChecksums(map[string][]byte{testutil.AssetName("testext", "1.1.0"): readBin(t, "1.1.0")}))
+	if ext, err := inst.Update(ctx, "testext", ""); err != nil || ext.Manifest.Version != "1.1.0" {
+		t.Fatalf("update after the helper ended: %v", err)
+	}
+}
+
 func TestUpdates(t *testing.T) {
 	rs := testutil.NewReleaseServer(t)
 	old, newer := readBin(t, ""), readBin(t, "1.1.0")
@@ -727,4 +760,22 @@ func TestResolveWithoutManager(t *testing.T) {
 	if _, err := Pick(&Resolution{Candidates: []Candidate{{ID: "a"}, {ID: "b"}}}, ""); !errors.Is(err, ErrChooseID) {
 		t.Fatal("Pick without id")
 	}
+}
+
+func TestInstallerSharesTheBusyLock(t *testing.T) {
+	rs := testutil.NewReleaseServer(t)
+	m, _ := newManager(t, testutil.TempDir(t), nil)
+	var shared oplock.Lock
+	inst := NewInstaller(InstallerOptions{Manager: m, Releases: github.NewClient(rs.URL, "", "test"),
+		Arch: runtime.GOARCH, MaxDownload: 200 << 20, Busy: &shared})
+	if !shared.TryLock() {
+		t.Fatal("lock not free")
+	}
+	if _, err := inst.Install(context.Background(), InstallRequest{Source: "acme/tools"}); !errors.Is(err, ErrBusy) {
+		t.Fatalf("install under a held shared lock: %v", err)
+	}
+	if _, err := inst.Update(context.Background(), "testext", ""); !errors.Is(err, ErrBusy) {
+		t.Fatalf("update under a held shared lock: %v", err)
+	}
+	shared.Unlock()
 }

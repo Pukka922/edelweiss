@@ -30,6 +30,15 @@ function setup(path: string, authenticated: boolean, extensions = [ext("system",
   const fetch = fakeFetch({
     "GET /api/session": () => served.session(),
     "GET /api/extensions": () => json(200, { extensions: served.extensions }),
+    "GET /api/about": () =>
+      json(200, {
+        version: "0.3.1",
+        arch: "amd64",
+        mode: "sys",
+        possible: true,
+        repo: "Pukka922/edelweiss",
+        state: { running: false },
+      }),
     "POST /api/auth/login": () =>
       json(200, sessionInfo({ user: { name: "bob", uid: 1001, groups: ["bob"] } })),
   });
@@ -71,6 +80,13 @@ describe("shell routes", () => {
     const { history, findByText } = setup("/", true, []);
     await waitFor(() => expect(history.get()).toBe("/settings/extensions"));
     expect(await findByText("No extensions are installed yet.")).toBeTruthy();
+  });
+
+  it("opens the about page in the layout", async () => {
+    const { findByText, getAllByRole, fetch } = setup("/settings/about", true);
+    expect(await findByText("Architecture")).toBeTruthy();
+    expect(getAllByRole("banner").length).toBeGreaterThan(0);
+    expect(fetch.calls.some((c) => c.url === "/api/about")).toBe(true);
   });
 
   it("shows the not-found page inside the layout for unknown paths", async () => {

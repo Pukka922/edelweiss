@@ -19,10 +19,15 @@ Download `edelweissd_<version>_linux_<arch>` and `checksums.txt` from the
 `arm64` on aarch64. Or build them on a development machine (see [README.md](../README.md#building)):
 
 ```sh
-make build
+git checkout v<version>
+make build VERSION=<version>
 ls dist/
-# checksums.txt  edelweissd_0.2.0_linux_amd64  edelweissd_0.2.0_linux_arm64
+# checksums.txt  edelweissd_<version>_linux_amd64  edelweissd_<version>_linux_arm64
 ```
+
+Give the version of the tag as `VERSION`. In the releases after 0.2.0 the tag is the only source of the version: their
+sources hold the placeholder `0.0.0-dev`, and `make build` without `VERSION` writes `edelweissd_0.0.0-dev_linux_<arch>`,
+which reports it.
 
 Copy the binary and `checksums.txt` to the host, for example with `scp`, and verify it there:
 `grep linux_amd64 checksums.txt | sha256sum -c` (`linux_arm64` on aarch64). The release's `checksums.txt` also lists the
@@ -244,7 +249,9 @@ rc-service edelweiss restart
 grep edelweiss /var/log/messages     # the log (also: login, admin mode, installs, removals)
 ```
 
-**Upgrading edelweissd:** replace `/usr/local/sbin/edelweissd`, run `edelweissd service install` again and then
+**Upgrading edelweissd:** from a version with the page **Settings → About** on, edelweissd updates itself there (admin
+mode; see [Updating](../README.md#updating)). The first update to such a version, and any host that cannot update
+itself, use the manual way: replace `/usr/local/sbin/edelweissd`, run `edelweissd service install` again and then
 `rc-service edelweiss restart`. Moving the new file over the old one works while the old one runs:
 
 ```sh
@@ -258,6 +265,22 @@ The init script is rewritten on every `service install`, so a new release can ch
 version); without this step the service keeps the old script.
 
 A restart stops the extension processes and signs everybody out (sessions are kept in memory only).
+
+**After an interrupted update:** the update from the About page survives edelweissd's own restart and rolls back by
+itself when the new version does not come up. It does not cover an interruption of the host itself during its
+window of about a minute and a half (a power loss, a reboot, a manual restart of the service). Then look at
+`/var/lib/edelweiss/self-update/result.json`, at the log (`grep edelweiss /var/log/messages`, tag `edelweiss`) and at
+`/var/lib/edelweiss/self-update/helper.log`. To go back to the previous version, as root (use the path of your
+binary; `/usr/local/sbin/edelweissd` is the default):
+
+```sh
+mv /usr/local/sbin/edelweissd.edelweiss-bak /usr/local/sbin/edelweissd
+install -m 755 /var/lib/edelweiss/self-update/init.edelweiss-bak /etc/init.d/edelweiss
+rc-service edelweiss restart
+```
+
+Run these only when the update was interrupted: after a successful update the backups are the previous version. In
+diskless mode run `lbu commit -d` afterwards.
 
 Admins can restart and shut down the host in the web interface (the Host menu, admin mode); edelweissd runs `reboot` or
 `poweroff`.

@@ -119,9 +119,10 @@ func (sh *shell) cspHeader(c fiber.Ctx) error {
 }
 
 func (sh *shell) handler(c fiber.Ctx) error {
-	// Fiber does not percent-decode wildcard params (Config.UnescapePath is
-	// false by default), so decode here, then clean the result so encoded
-	// traversal (..%2f, %2e%2e) cannot leave the FS root.
+	// Fiber decodes only the escapes of unreserved characters in wildcard
+	// params and resolves dot segments (Config.UnescapePath is false by
+	// default), so decode the rest here (%20, %C3%A9), then clean the result
+	// so encoded traversal (..%2F) cannot leave the FS root.
 	raw, err := url.PathUnescape(c.Params("*"))
 	if err != nil {
 		return fiber.ErrNotFound

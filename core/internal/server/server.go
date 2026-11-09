@@ -68,12 +68,15 @@ type Deps struct {
 	Shell     fs.FS
 	Dev       bool // serve the shell from disk for development: index.html re-read per request, no immutable caching
 	Version   string
+	Started   time.Time // process start, reported by /api/health
 	Logger    *slog.Logger
 	Hostname  func() string
 	Timeouts  Timeouts // zero fields: the defaults
 
 	Power      Power         // restarts or shuts down the host; nil answers 503 power_unavailable
 	PowerDelay time.Duration // how long after the answer Power runs (the daemon: 1 s)
+
+	SelfUpdate SelfUpdater // the about page and the update of edelweissd itself; nil answers 503 self_update_unavailable
 
 	Now func() time.Time // the clock of the update cache; nil: time.Now
 }
@@ -156,6 +159,7 @@ func New(d Deps) (*fiber.App, error) {
 	app.Use(helmet.New(helmet.Config{XFrameOptions: "DENY", ReferrerPolicy: "no-referrer"}))
 	app.Use(sh.cspHeader)
 	app.Use(s.requestID)
+	app.Use(confineExtensionRoutes)
 	app.Use("/api", noStore, limitBody(apiBodyLimit))
 
 	byIP, byUser := s.loginLimiters()
@@ -173,6 +177,10 @@ func New(d Deps) (*fiber.App, error) {
 	app.Post("/api/extensions/:id/update", s.requireSession, s.csrf, s.requireAdminMode, s.updateExtension)
 	app.Post("/api/system/reboot", s.requireSession, s.csrf, s.requireAdminMode, s.power("reboot"))
 	app.Post("/api/system/poweroff", s.requireSession, s.csrf, s.requireAdminMode, s.power("poweroff"))
+	app.Get("/api/about", s.requireSession, s.about)
+	app.Get("/api/about/update", s.requireSession, s.requireAdminMode, s.aboutCheck)
+	app.Post("/api/about/update", s.requireSession, s.csrf, s.requireAdminMode, s.aboutStart)
+	app.Delete("/api/about/update/result", s.requireSession, s.csrf, s.requireAdminMode, s.aboutDismiss)
 	app.All("/api/*", func(c fiber.Ctx) error { return fiber.ErrNotFound })
 	app.All("/ext/:id/api/*", s.requireSession, s.csrf, s.extAPI)
 	app.All("/ext/:id/ui/*", s.requireSession, s.extUI)
@@ -188,7 +196,7 @@ func noStore(c fiber.Ctx) error {
 }
 
 func (s *Server) health(c fiber.Ctx) error {
-	return c.JSON(fiber.Map{"status": "ok", "version": s.d.Version})
+	return c.JSON(fiber.Map{"status": "ok", "version": s.d.Version, "started": s.d.Started.UTC().Format(time.RFC3339Nano)})
 }
 
 func (s *Server) requestID(c fiber.Ctx) error {

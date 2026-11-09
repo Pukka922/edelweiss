@@ -15,9 +15,10 @@ import (
 // uiHandler serves files of fsys below UIPrefix with ETag revalidation.
 func uiHandler(fsys fs.FS) fiber.Handler {
 	return func(c fiber.Ctx) error {
-		// Fiber does not percent-decode wildcard params (Config.UnescapePath is
-		// false by default), so decode here, then clean and validate the result
-		// so encoded traversal (..%2f, %2e%2e) cannot escape the FS root.
+		// Fiber decodes only the escapes of unreserved characters in wildcard
+		// params and resolves dot segments (Config.UnescapePath is false by
+		// default), so decode the rest here, then clean and validate the result
+		// so encoded traversal (..%2F) cannot escape the FS root.
 		raw, err := url.PathUnescape(c.Params("*"))
 		if err != nil {
 			return fiber.ErrNotFound

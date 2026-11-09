@@ -21,6 +21,7 @@ import (
 	"github.com/Pukka922/edelweiss/core/internal/daemon"
 	"github.com/Pukka922/edelweiss/core/internal/extmgr"
 	"github.com/Pukka922/edelweiss/core/internal/github"
+	"github.com/Pukka922/edelweiss/core/internal/selfupdate"
 	"github.com/Pukka922/edelweiss/core/internal/service"
 	"github.com/Pukka922/edelweiss/core/internal/version"
 )
@@ -33,11 +34,16 @@ const usageText = `Usage:
   edelweissd ext remove <id> [--config FILE]
   edelweissd service install
   edelweissd service uninstall [--purge]
+  edelweissd service script --binary <path>
   edelweissd version
 
 GitHub repositories: owner/repo, github.com/owner/repo or https://github.com/owner/repo, each optionally
 followed by @tag (default: the latest release).
 `
+
+// productionDeps are the dependencies of the self-update helper; a variable for the tests, which must not reach the
+// syslog or the cgroups of the machine.
+var productionDeps = selfupdate.ProductionHelperDeps
 
 // Main runs the command line and returns the exit code.
 func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
@@ -58,6 +64,12 @@ func Main(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 	case "help":
 		fmt.Fprint(stdout, usageText)
 		return 0
+	case "self-update-apply": // the helper of a self-update, which edelweissd starts; no command for people
+		if len(args) != 1 {
+			fmt.Fprintln(stderr, "self-update-apply: the path of a plan is needed")
+			return 2
+		}
+		return selfupdate.RunHelper(args[0], productionDeps())
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usageText)
 		return 2
@@ -239,7 +251,7 @@ func runExt(args []string, stdin io.Reader, stdout, stderr io.Writer) int {
 }
 
 func runService(args []string, stdout, stderr io.Writer) int {
-	if len(args) == 0 || (args[0] != "install" && args[0] != "uninstall") {
+	if len(args) == 0 || (args[0] != "install" && args[0] != "uninstall" && args[0] != "script") {
 		fmt.Fprint(stderr, usageText)
 		return 2
 	}
@@ -248,6 +260,10 @@ func runService(args []string, stdout, stderr io.Writer) int {
 	fset.SetOutput(stderr)
 	fset.Usage = func() { fmt.Fprint(stderr, usageText) }
 	purge := false
+	binary := ""
+	if sub == "script" {
+		fset.StringVar(&binary, "binary", "", "absolute path of the edelweissd binary the script runs")
+	}
 	if sub == "uninstall" {
 		fset.BoolVar(&purge, "purge", false, "also delete /etc/conf.d/edelweiss, /etc/edelweiss and /var/lib/edelweiss")
 	}
@@ -258,6 +274,19 @@ func runService(args []string, stdout, stderr io.Writer) int {
 	if len(pos) != 0 {
 		fmt.Fprint(stderr, usageText)
 		return 2
+	}
+	if sub == "script" {
+		if binary == "" {
+			fmt.Fprint(stderr, usageText)
+			return 2
+		}
+		script, err := service.Script(binary)
+		if err != nil {
+			fmt.Fprintln(stderr, err)
+			return 2
+		}
+		fmt.Fprint(stdout, script)
+		return 0
 	}
 	if os.Geteuid() != 0 {
 		fmt.Fprintf(stderr, "service %s must be run as root\n", sub)

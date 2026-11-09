@@ -116,19 +116,13 @@ func TestUIRejectsEncodedTraversal(t *testing.T) {
 		UIPrefix + "/%zz",
 		UIPrefix + "/bad%",
 	} {
-		// Set RequestURI directly: httptest.NewRequest rejects invalid escapes
-		// such as "%zz", but the server must still answer them with 404.
-		req := httptest.NewRequest("GET", UIPrefix+"/x", nil)
-		req.RequestURI = p
-		resp, err := ext.App.Test(req)
-		if err != nil {
-			t.Fatal(err)
+		// Send p verbatim as the request line: httptest.NewRequest rejects invalid
+		// escapes such as "%zz", but the server must still answer them with 404.
+		status, body := rawGet(t, ext.App, p)
+		if status != 404 {
+			t.Errorf("%s: status %d, want 404", p, status)
 		}
-		body, _ := io.ReadAll(resp.Body)
-		if resp.StatusCode != 404 {
-			t.Errorf("%s: status %d, want 404", p, resp.StatusCode)
-		}
-		if strings.Contains(string(body), "top secret") {
+		if strings.Contains(body, "top secret") {
 			t.Errorf("%s: leaked secret", p)
 		}
 	}

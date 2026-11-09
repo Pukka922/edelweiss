@@ -1,5 +1,6 @@
 import { localized, useI18n } from "@edelweiss/sdk";
 import { A } from "@solidjs/router";
+import { IconInfoCircle } from "@tabler/icons-solidjs";
 import { createMemo, For } from "solid-js";
 import { useShell } from "../context";
 import { groupBySection } from "../state/extensions";
@@ -56,6 +57,14 @@ export function Sidebar() {
               <A href="/settings/extensions" activeClass="menu-active">
                 <PuzzleIcon />
                 {t("nav.extensions")}
+              </A>
+            </li>
+            <li>
+              <A href="/settings/about" activeClass="menu-active">
+                <span aria-hidden="true">
+                  <IconInfoCircle size={20} strokeWidth={2} />
+                </span>
+                {t("nav.about")}
               </A>
             </li>
           </ul>

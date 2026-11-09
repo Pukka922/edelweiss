@@ -440,6 +440,12 @@ func TestReservedPathsNeverReachExtension(t *testing.T) {
 		"/ext/testext/api/x/%2E%2E/%5Fedelweiss/status", "/ext/testext/api/x/../_edelweiss/status",
 		"/ext/testext/api/x/..%2f_edelweiss/ui/index.js", "/ext/testext/api//_edelweiss/status",
 		"/ext/testext/api/bad%zz/_edelweiss/status",
+		// every spelling of a dot segment, and a ".." that climbs out of the route (the router resolves both)
+		"/ext/testext/api/%2E%2E/_edelweiss/status", "/ext/testext/api/%2e%2E/_edelweiss/status",
+		"/ext/testext/api/.%2e/_edelweiss/status", "/ext/testext/api/%2e./_edelweiss/status",
+		"/ext/testext/api/%2f../_edelweiss/status", "/ext/testext/api/%2F..%2F_edelweiss%2Fstatus",
+		"/ext/testext/api/../_edelweiss/status", "/ext/testext/api/x/%2e%2e/%2e/_edelweiss/status",
+		"/EXT/testext/api/%2e%2e/_edelweiss/status",
 	} {
 		req := httptest.NewRequest(http.MethodGet, "/", nil)
 		req.URL.Opaque = p // used verbatim as the request target
@@ -791,6 +797,34 @@ func TestSecurityHeaders(t *testing.T) {
 	if resp.Header.Get("X-Frame-Options") != "DENY" || resp.Header.Get("X-Content-Type-Options") != "nosniff" ||
 		resp.Header.Get("Content-Security-Policy") == "" || resp.Header.Get("X-Request-Id") == "" {
 		t.Fatalf("headers: %v", resp.Header)
+	}
+}
+
+// The middleware of the whole server (security headers, request ID, the confinement
+// of extension routes) runs for every request path. Up to Fiber 3.6 a path of
+// slashes only ("//") skipped every root middleware, while the shell's "/*" still
+// answered it.
+func TestGlobalMiddlewareRunsForEveryPath(t *testing.T) {
+	env := newTestEnv(t, nil)
+	host := serve(t, env.app)
+	// sent on the wire: app.Test cannot send a request target that begins with "//"
+	for _, p := range []string{"/", "//", "///", "//assets/app.js"} {
+		conn, err := net.Dial("tcp", host)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = conn.SetDeadline(time.Now().Add(10 * time.Second))
+		_, _ = conn.Write([]byte("GET " + p + " HTTP/1.1\r\nHost: " + host + "\r\nConnection: close\r\n\r\n"))
+		resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatalf("%s: %v", p, err)
+		}
+		_ = resp.Body.Close()
+		_ = conn.Close()
+		if resp.Header.Get("X-Frame-Options") != "DENY" || resp.Header.Get("X-Content-Type-Options") != "nosniff" ||
+			resp.Header.Get("Content-Security-Policy") == "" || resp.Header.Get("X-Request-Id") == "" {
+			t.Fatalf("%s: status %d, headers %v", p, resp.StatusCode, resp.Header)
+		}
 	}
 }
 
@@ -1282,6 +1316,10 @@ func TestUIPathsStayInsideTheUIDirectory(t *testing.T) {
 		"/ext/testext/ui/a/..%2f..%2fb", "/ext/testext/ui/x/../../_edelweiss/status",
 		"/ext/testext/ui/%2e%2e", "/ext/testext/ui/%2e", "/ext/testext/ui/%2findex.js", "/ext/testext/ui/a%00b.js",
 		"/ext/testext/ui/bad%zz.js", "/ext/testext/ui/", "/ext/testext/ui/%2e%2e/index.js",
+		// every spelling of a dot segment, and a ".." that climbs out of the route (the router resolves both)
+		"/ext/testext/ui/.%2e/%2e./_edelweiss/status", "/ext/testext/ui/%2E%2e/index.js", "/ext/testext/ui/%2e./index.js",
+		"/ext/testext/ui/%2f../index.js", "/ext/testext/ui/%2F..%2Findex.js", "/ext/testext/ui/../../_edelweiss/status",
+		"/ext/testext/ui/..", "/ext/testext/ui/../index.js",
 	} {
 		resp := rawRequest(t, env.app, http.MethodGet, p, nil, "Cookie", session)
 		if resp.StatusCode != 404 || pool.count() != 0 {
@@ -1289,11 +1327,64 @@ func TestUIPathsStayInsideTheUIDirectory(t *testing.T) {
 		}
 	}
 	// plain files, also spelled with encoded or redundant parts, are forwarded
-	for i, p := range []string{"/ext/testext/ui/index.js", "/ext/testext/ui/%69ndex.js", "/ext/testext/ui/x/../index.js", "/ext/testext/ui/./index.js"} {
+	for i, p := range []string{"/ext/testext/ui/index.js", "/ext/testext/ui/%69ndex.js", "/ext/testext/ui/x/../index.js", "/ext/testext/ui/./index.js",
+		"/ext/testext/ui/x/%2e%2e/index.js", "/ext/testext/ui/%2E/index.js"} {
 		resp := rawRequest(t, env.app, http.MethodGet, p, nil, "Cookie", session)
 		body, _ := io.ReadAll(resp.Body)
 		if resp.StatusCode != 200 || !strings.Contains(string(body), "export default") || pool.count() != i+1 {
 			t.Fatalf("%s: status %d, acquired %d", p, resp.StatusCode, pool.count())
+		}
+	}
+}
+
+// The router resolves dot segments ("." and "..", also percent-encoded) before it
+// matches a route, so a ".." could carry a request out of the route of an
+// extension, past the guards of its handlers, to the shell or to another route, or
+// into the route of an extension from elsewhere. Such a request is not found. A ".."
+// that stays inside the wildcard is resolved there, as before.
+func TestDotSegmentsDoNotCrossExtensionRoutes(t *testing.T) {
+	var pool *countingPool
+	env := newTestEnv(t, func(d *Deps) { pool = &countingPool{Pool: d.Pool}; d.Pool = pool })
+	c := &client{t: t, app: env.app}
+	c.login("bob", testPassword)
+	session := "edelweiss_session=" + c.cookie
+
+	for _, p := range []string{
+		// out of the API route: to the shell, to the UI route, to the core's API
+		"/ext/testext/api/%2e%2e/hello", "/ext/testext/api/%2E%2E/hello", "/ext/testext/api/.%2e/hello",
+		"/ext/testext/api/%2e./hello", "/ext/testext/api/../hello", "/ext/testext/api/%2e%2e", "/ext/testext/api/..",
+		"/ext/testext/api/%2e%2e/ui/index.js", "/ext/testext/api/%2e%2e/%2e%2e/%2e%2e/api/session",
+		// out of the UI route
+		"/ext/testext/ui/%2e%2e", "/ext/testext/ui/..", "/ext/testext/ui/%2e%2e/api/hello", "/ext/testext/ui/../api/hello",
+		// through the id or the namespace
+		"/ext/testext/%2e%2e/testext/api/hello", "/ext/%2e%2e/ext/testext/api/hello",
+		// into the route of an extension from elsewhere
+		"/x/%2e%2e/ext/testext/api/hello", "/x/../ext/testext/api/hello", "/%2e%2e/ext/testext/api/hello",
+		"/api/%2e%2e/ext/testext/api/hello", "/assets/.%2e/ext/testext/ui/index.js",
+		// the router ignores case and decodes the escapes of unreserved characters
+		"/EXT/testext/api/%2e%2e/hello", "/%65xt/testext/ui/%2E%2e/api/hello",
+		"/%65xt/testext/api/%2e%2e/%2e%2e/%2e%2e/api/session",
+		// a "." is removed and keeps the ".." after it in the prefix
+		"/ext/testext/api/%2e/%2e%2e/hello", "/ext/testext/api/./../hello",
+	} {
+		resp := rawRequest(t, env.app, http.MethodGet, p, nil, "Cookie", session)
+		body, _ := io.ReadAll(resp.Body)
+		shell := strings.Contains(string(body), "<body>shell</body>")
+		if resp.StatusCode != 404 || shell || pool.count() != 0 {
+			t.Fatalf("%s: status %d, answered by the shell: %v, reached an extension process: %v",
+				p, resp.StatusCode, shell, pool.count() != 0)
+		}
+	}
+	for i, p := range []string{
+		"/ext/testext/api/x/../hello", "/ext/testext/api/x/%2e%2e/hello", "/ext/testext/api/./hello", "/ext/testext/api/%2E/hello",
+	} {
+		resp := rawRequest(t, env.app, http.MethodGet, p, nil, "Cookie", session)
+		var hello struct {
+			User string `json:"user"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&hello)
+		if resp.StatusCode != 200 || hello.User != "bob" || pool.count() != i+1 {
+			t.Fatalf("%s: status %d %+v, acquired %d", p, resp.StatusCode, hello, pool.count())
 		}
 	}
 }
@@ -1572,6 +1663,8 @@ func TestUnsafeRoutesNeedTheCSRFToken(t *testing.T) {
 			{http.MethodPost, "/api/extensions/resolve", map[string]string{"source": "a/b"}},
 			{http.MethodPost, "/api/extensions/install", map[string]string{"source": "a/b"}},
 			{http.MethodPost, "/api/extensions/testext/update", nil},
+			{http.MethodPost, "/api/about/update", map[string]string{"sha256": "x"}},
+			{http.MethodDelete, "/api/about/update/result", nil},
 			{http.MethodPost, "/api/auth/logout", nil},
 			{http.MethodPost, "/ext/testext/api/echo", map[string]int{"a": 1}},
 		} {
@@ -1666,5 +1759,18 @@ func TestAuditLog(t *testing.T) {
 		if secret != "" && strings.Contains(logs, secret) {
 			t.Errorf("secret %q in the log:\n%s", secret, logs)
 		}
+	}
+}
+
+func TestHealthStarted(t *testing.T) {
+	started := time.Date(2026, 11, 5, 12, 30, 45, 123456789, time.UTC)
+	env := newTestEnv(t, func(d *Deps) { d.Started = started })
+	resp := (&client{t: t, app: env.app}).do(http.MethodGet, "/api/health", nil)
+	var h struct{ Status, Version, Started string }
+	if err := json.NewDecoder(resp.Body).Decode(&h); err != nil {
+		t.Fatal(err)
+	}
+	if h.Status != "ok" || h.Version != "test" || h.Started != "2026-11-05T12:30:45.123456789Z" {
+		t.Fatalf("health: %+v", h)
 	}
 }

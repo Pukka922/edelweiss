@@ -3,6 +3,9 @@
 // built JavaScript and type definitions; web/sdk/package.json keeps pointing to the sources, which the workspaces of
 // this repository use. The staging directory also gets the LICENSE of the repository, and its package.json the license
 // field of web/sdk/package.json.
+// <version> comes from make in SDK_PACK_VERSION: the version of the release (make sdk-pack VERSION=<version>), or the
+// placeholder 0.0.0-dev without one. It goes into the staging package.json; web/sdk/package.json holds the placeholder,
+// which is also the version without SDK_PACK_VERSION.
 import { execFileSync } from "node:child_process";
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import path from "node:path";
@@ -31,12 +34,13 @@ for (const file of built) {
 }
 
 const pkg = JSON.parse(readFileSync(path.join(sdk, "package.json"), "utf8"));
+const version = process.env.SDK_PACK_VERSION || pkg.version;
 // "solid" points to the same files as "default": vite-plugin-solid recognises packages with this condition as Solid
 // libraries and lets vitest compile them with the test, so the SDK and the test share one solid-js.
 const entry = (types, js) => ({ types, solid: js, default: js });
 const manifest = {
   name: pkg.name,
-  version: pkg.version,
+  version,
   description: "SDK for the user interfaces of edelweiss extensions",
   license: pkg.license,
   type: "module",
@@ -60,4 +64,11 @@ const name = execFileSync("npm", ["pack", "--pack-destination", out], { cwd: sta
   .trim()
   .split("\n")
   .pop();
+// npm names the tarball after the name and the version of the staging package.json; make (sdk-pack-check, release)
+// expects exactly this name.
+const want = `edelweiss-sdk-${version}.tgz`;
+if (name !== want) {
+  console.error(`sdk-pack: npm pack wrote dist/${name}, expected dist/${want}`);
+  process.exit(1);
+}
 console.log(`sdk-pack: dist/${name}`);

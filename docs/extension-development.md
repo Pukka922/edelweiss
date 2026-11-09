@@ -101,7 +101,7 @@ edelweiss-ext-system has the same parts; its backend lives in packages below `in
 | Field | Rule |
 |---|---|
 | `id` | `^[a-z0-9][a-z0-9-]{1,31}$`; `shell` and `sdk` are reserved |
-| `version` | semantic version (`1.2.3`, optionally `-pre` or `+build`); must match the release file name |
+| `version` | semantic version (`1.2.3`, optionally `-pre` or `+build`); must match the release file name. The template's `manifest.json` holds the placeholder `0.0.0-dev`, and the release build sets the version of the tag (see [Publishing a release](#publishing-a-release)) |
 | `apiVersion` | `1` (the contract: Solid 1.x runtime, SDK, headers) |
 | `name` | `en` is required, `de` recommended |
 | `menu.section` | `system`, `storage`, `virtualization`, `network`, `tools` or `other`; `order` sorts within the section. `containers` (edelweiss 0.1.0) is still read as `virtualization`. An extension with `virtualization` needs edelweiss 0.2.0: edelweiss 0.1.0 rejects the unknown section |
@@ -144,6 +144,10 @@ The snippets leave out the `package` clause and the imports.
 //go:embed manifest.json
 var manifest []byte
 
+// The version of a release: only the release build sets it, with -ldflags "-X main.version=<version>" (make release),
+// and it is empty in every other build, which then reports the placeholder version of manifest.json.
+var version string
+
 // The built UI (make build runs npm run build in ui/ first). ui/dist holds a committed .gitkeep, so the package
 // compiles before the first UI build too.
 //
@@ -151,15 +155,22 @@ var manifest []byte
 var uiFiles embed.FS
 
 func main() {
+	m, err := manifestWithVersion(manifest, version)
+	if err != nil {
+		panic(err)
+	}
 	ui, err := fs.Sub(uiFiles, "ui/dist")
 	if err != nil {
 		panic(err)
 	}
-	ext := sdk.New(sdk.Options{Manifest: manifest, UI: ui})
+	ext := sdk.New(sdk.Options{Manifest: m, UI: ui})
 	register(ext.App)
 	ext.Run()
 }
 ```
+
+`manifestWithVersion` (also in the template's `main.go`) returns the manifest with its `version` field set to the
+release version, and `manifest.json` as it is when there is none.
 
 `greeting.go`:
 
@@ -365,7 +376,10 @@ make build test lint
 - it installs the tarball into `ui/node_modules` with `npm install --no-save --no-package-lock`, so `ui/package.json`
   stays unchanged and no `package-lock.json` is written.
 
-None of this needs github.com, so it also works for an SDK version that is not published yet.
+None of this needs github.com, so it also works for an SDK version that is not published yet. The SDKs of the checkout
+carry the placeholder version `0.0.0-dev` of the edelweiss sources: the tarball is `edelweiss-sdk-0.0.0-dev.tgz`, and
+the extension reports `0.0.0-dev` as its `sdkVersion` (the Go SDK takes it from the build info of the binary, and a
+replace onto a local directory records no version).
 
 - Do not run `go mod tidy`, `go get` for the SDK, or a plain `npm install` while that version is unpublished: they
   look it up on GitHub.
@@ -378,7 +392,7 @@ edelweiss-ext-system at `../edelweiss-ext-system` (or `EXT_SYSTEM_DIR=<path>` se
 none.
 
 ```sh
-make release
+make release VERSION=<version>
 mkdir -p ../edelweiss/build
 cp dist/edelweiss-ext-<id>_<version>_linux_amd64 ../edelweiss/build/
 cd ../edelweiss
@@ -408,10 +422,10 @@ The template's release workflow (`.github/workflows/release.yml`) publishes a re
 credentials in the checkout. It checks the tag name (`v`, then only letters, digits, `.`, `+` and `-`), then runs three
 make targets and hands `dist/` on as a workflow artifact:
 
-- `make release-check`: the tag must match the manifest's version, which has to be a plain `x.y.z` or `x.y.z-pre` by
-  the rules of Go (no leading zeros, no empty pre-release identifier, no `+build` metadata);
+- `make release-check`: the tag has to be a plain `x.y.z` or `x.y.z-pre` by the rules of Go (no leading zeros, no empty
+  pre-release identifier, no `+build` metadata);
 - `make lint test`;
-- `make release`: the files below, in `dist/`.
+- `make release`: the files below, in `dist/`, with the version of the tag in the binaries.
 
 `publish` runs when `build` has succeeded. It holds the write token, builds nothing and needs neither Go nor Node. It
 downloads the artifact into `dist/` and runs `make gh-release`: it checks that `dist/` holds exactly `checksums.txt`
@@ -419,10 +433,15 @@ and the two binaries of this version, that the files match `checksums.txt` and t
 `gh release create` with these files. A version with a `-` (`0.2.0-rc.1`) is published as a GitHub pre-release, which
 the installer's "latest release" leaves out, so an rc is not offered as an update.
 
-Set the version in `manifest.json`, commit and push `main`, then:
+No file needs changing for a release: the tag is the only source of the version. The template's `manifest.json` holds
+the placeholder `0.0.0-dev`; the release build puts the version of the tag into the binaries
+(`-ldflags -X main.version`, which `main.go` writes into the manifest) and checks it by running the binary for the
+build machine with `--edelweiss-manifest`, because edelweiss refuses a binary whose manifest version differs from the
+version in the name of the release file. Check the version, push `main`, then the tag:
 
 ```sh
 make release-check VERSION=0.2.0
+git push origin main
 git tag v0.2.0
 git push origin v0.2.0
 ```

@@ -41,6 +41,22 @@ describe("shell ui", () => {
     expect(view.getByRole("link", { name: "Sys" }).getAttribute("href")).toBe("/x/sys");
   });
 
+  it("sidebar has the About entry after Extensions, Über in German", async () => {
+    const view = mount({ "GET /api/extensions": () => json(200, { extensions: [] }) }, () => <Sidebar />);
+    await view.shell.extensions.reload();
+    const links = () =>
+      view
+        .getAllByRole("link")
+        .map((a) => [a.textContent, a.getAttribute("href")])
+        .filter(([, href]) => href?.startsWith("/settings"));
+    expect(links()).toEqual([
+      ["Extensions", "/settings/extensions"],
+      ["About", "/settings/about"],
+    ]);
+    view.shell.setLocale("de");
+    expect(links()[1]).toEqual(["Über", "/settings/about"]);
+  });
+
   // containers became virtualization in edelweiss 0.2.0: the section sits between storage and network
   it("sidebar shows the section virtualization as Containers & VMs, and in German as Container & VMs", async () => {
     const view = mount(

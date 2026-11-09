@@ -7,6 +7,7 @@ import {
   ToastContext,
 } from "@edelweiss/sdk";
 import { type Accessor, createContext, createSignal, type JSX, useContext } from "solid-js";
+import { type AboutApi, createAboutApi } from "./about";
 import { de } from "./i18n/de";
 import { en } from "./i18n/en";
 import { applyLocale, loadLocale, loadTheme, saveLocale, saveTheme, type Theme } from "./prefs";
@@ -24,6 +25,8 @@ export interface Shell {
   session: SessionStore;
   extensions: ExtensionsStore;
   installer: InstallerApi;
+  /** The core's self-update routes (/api/about/…). */
+  about: AboutApi;
   /** Which update check the extensions page showed the errors of; it outlives the page. */
   updateChecks: CheckMemory;
   toasts: ToastStore;
@@ -56,6 +59,7 @@ export function createShell(options: { fetch?: typeof fetch; locale?: Locale; th
     session,
     extensions: createExtensionsStore(session.api),
     installer: createInstallerApi(session.api),
+    about: createAboutApi(session.api),
     updateChecks: createCheckMemory(),
     toasts: createToastStore(),
     i18n,

@@ -37,7 +37,9 @@ make sdk-pack-check           # installs that tarball in a fresh project, builds
 make release VERSION=0.2.0    # all release files in dist/ (see Releasing)
 ```
 
-`make sdk-pack-check` needs the npm registry.
+`make sdk-pack-check` needs the npm registry. Without `VERSION`, `make build` and `make sdk-pack` use the placeholder
+version `0.0.0-dev` of the sources (`edelweissd_0.0.0-dev_linux_<arch>`, `edelweiss-sdk-0.0.0-dev.tgz`);
+`make build VERSION=<version>` builds edelweissd of that version.
 
 ## Installation
 
@@ -49,10 +51,10 @@ edelweiss runs on 64-bit Alpine Linux 3.24 with OpenRC. The details of every ste
 Download `edelweissd_<version>_linux_<arch>` and `checksums.txt` from the
 [latest release](https://github.com/Pukka922/edelweiss/releases/latest):
 
-| System | `<arch>` |
-|---|---|
-| x86_64 | `amd64` |
-| aarch64 (64-bit ARM, for example a Raspberry Pi 3, 4 or 5 with the aarch64 image) | `arm64` |
+| System                                                                            | `<arch>` |
+| --------------------------------------------------------------------------------- | -------- |
+| x86_64                                                                            | `amd64`  |
+| aarch64 (64-bit ARM, for example a Raspberry Pi 3, 4 or 5 with the aarch64 image) | `arm64`  |
 
 32-bit systems (x86, armv7, armhf) are not supported. You can also build the binaries yourself (Linux or WSL): they
 are static and cross-compiled, and `make build` always builds amd64 and arm64.
@@ -62,10 +64,10 @@ are static and cross-compiled, and `make build` always builds amd64 and arm64.
 1. Set up Alpine with `setup-alpine`: the network, an NTP client (HTTPS downloads from GitHub and the TLS certificate
    need the correct time), the SSH server and a user account (for example `myUser`), which will be your edelweiss
    login.
-2. Decide how the system is stored. A *diskless* Alpine runs from RAM (the default of the images for boards such as
+2. Decide how the system is stored. A _diskless_ Alpine runs from RAM (the default of the images for boards such as
    the Raspberry Pi); only what `lbu commit` saves survives a reboot, and by default that is `/etc` without
    `/etc/init.d`.
-   - Recommended: install Alpine in *sys mode* on its disk or SD card (for a Raspberry Pi as described in the Alpine
+   - Recommended: install Alpine in _sys mode_ on its disk or SD card (for a Raspberry Pi as described in the Alpine
      wiki: [Classic install or sys mode on Raspberry Pi](https://wiki.alpinelinux.org/wiki/Classic_install_or_sys_mode_on_Raspberry_Pi)).
      Then everything is stored as on any other Alpine system.
    - Diskless works too, but needs the `lbu` commands in step 4.
@@ -109,11 +111,32 @@ lbu commit -d
 In diskless mode run `lbu commit -d` again after every change: an extension installed, updated or removed (also in the
 web interface), a changed configuration or a new edelweissd binary.
 
-### Updates
+### Updating
 
-To update edelweissd later, download or build the new version and follow
-[Upgrading edelweissd](docs/install.md#operation). The extensions page offers updates of the extensions
-(`edelweissd ext update --all` on the command line).
+edelweissd updates itself under **Settings → About** (admin mode). Every signed-in user sees the version, the
+architecture and the mode there. In admin mode the page checks the latest release of
+[Pukka922/edelweiss](https://github.com/Pukka922/edelweiss) (never a pre-release) and offers an update. Before it
+changes anything, it shows the repository, the release, the file and its SHA-256 and asks you to confirm.
+
+- **What is checked:** the file `edelweissd_<version>_linux_<arch>` against the `checksums.txt` of the same release; the
+  new binary has to print exactly the offered version (`edelweissd version`); and there has to be free space of three
+  times the binary's size plus 16 MiB next to the binary.
+- **Everybody is signed out.** Open consoles and uploads break off, and the extensions restart.
+- **Rollback:** a detached helper swaps the binary and the init script, restarts the service and waits up to 60 s for
+  the new version. 30 s later it asks again; if the new version is not up and stable, it puts the old binary and init
+  script back and restarts. The backups (`<binary>.edelweiss-bak` and `/var/lib/edelweiss/self-update/init.edelweiss-bak`)
+  stay until the next update.
+- **Diskless and data mode:** after a successful update edelweissd runs `lbu commit`. The binary has to be in the lbu
+  list (`lbu include /usr/local/sbin/edelweissd`); the dialog warns when it is not.
+- **Where:** only when edelweissd runs as the OpenRC service that `edelweissd service install` sets up. Otherwise the
+  page says why it cannot update (development build, no OpenRC, read-only binary directory and so on).
+- **The result** is in `/var/lib/edelweiss/self-update/result.json`; the helper's log is in the syslog (tag
+  `edelweiss`) and in `/var/lib/edelweiss/self-update/helper.log`.
+
+The first update to a version with this page is manual: 0.2.0 and older cannot update themselves. Follow
+[Upgrading edelweissd](docs/install.md#operation) once; the page does the rest. The same section is the fallback, and
+it tells you how to recover when an update was interrupted by the host itself (a power loss, a reboot). The
+extensions page offers updates of the extensions (`edelweissd ext update --all` on the command line).
 
 ## Development
 
@@ -135,7 +158,10 @@ npm run watch       # rebuilds the SDK and the shell on change (reload the page)
 make mock-releases  # builds the test extension's (core/internal/testext) releases for the mock GitHub
                     # (make dev runs it)
 make test-alpine    # Go integration tests as root in Alpine
+make test-selfupdate # self-update in a throwaway Alpine container with OpenRC and a mock GitHub: an update, two
+                    # rollbacks and a refused checksum (needs docker and network for apk; never touches dist/)
 make test-service   # OpenRC service install/uninstall in a fresh Alpine container, with the system extension's release file
+                    # (both built with the fixed version 0.0.0-test)
 ```
 
 - `cd ../edelweiss-ext-system/ui && npm run watch` rebuilds the system extension's UI on change. The dev container
@@ -169,26 +195,34 @@ edelweissd and both SDKs share one version. A release `v<version>` publishes:
 These go up as a GitHub release, and the Go SDK is tagged `sdk/v<version>`, so
 `go get github.com/Pukka922/edelweiss/sdk@v<version>` finds it.
 
-1. Set the version in these places:
-   - the `Makefile` (`RELEASE_VERSION`);
-   - `web/sdk/package.json` (`version`);
-   - `sdk/protocol.go` (`Version`);
-   - the exact `@edelweiss/sdk` pin in `web/shell/package.json`.
+No file needs changing for a release: the tag `v<version>` is the only source of the version, for edelweissd, the JS
+SDK tarball and the Go SDK's tag `sdk/v<version>`.
 
-   Then run `npm install`, which refreshes `package-lock.json`.
-   `make release-check VERSION=<version>` checks these four places and the version of `web/sdk` in
-   `package-lock.json`, and that `<version>` is a plain `x.y.z` or `x.y.z-pre` by the rules of Go (no leading zeros, no
-   empty pre-release identifier, no `+build` metadata: Go ignores it in the tag `sdk/v<version>`). If a pin is left
-   behind, npm looks for the old SDK version in the npm registry and fails with a 404.
-2. Commit and push `main`, then tag and push: `git tag v<version> && git push origin v<version>`.
+1. Check the version with `make release-check VERSION=<version>`. It has to be a plain `x.y.z` or `x.y.z-pre` by the
+   rules of Go (no leading zeros, no empty pre-release identifier, no `+build` metadata: Go ignores it in the tag
+   `sdk/v<version>`).
+2. Push `main`, then the tag, which decides the version: `git push origin main`, then
+   `git tag v<version> && git push origin v<version>`.
+
+The sources hold the placeholder version `0.0.0-dev`: `core/internal/version`, `web/sdk/package.json` and the exact
+`@edelweiss/sdk` pin of `web/shell/package.json` (and so `package-lock.json`). The release build puts the version of
+the tag into edelweissd (`-ldflags -X`) and into the `package.json` of the JS SDK tarball, and checks edelweissd by
+running the binary for the build machine with `version`: it has to print exactly that version. A local build without
+`VERSION` reports `0.0.0-dev`: `make build` writes `edelweissd_0.0.0-dev_linux_<arch>`, and `make sdk-pack` writes
+`edelweiss-sdk-0.0.0-dev.tgz`.
+
+The Go SDK holds no version in its source either: the `sdkVersion` that an extension reports in its manifest is the
+version of the module `github.com/Pukka922/edelweiss/sdk` that the extension was built with, read from the build info
+of its binary (`0.0.0-dev` when it was built against a local checkout of the SDK, as with `make dev-sdk`).
 
 The release workflow (`.github/workflows/release.yml`) has two jobs, so that the build cannot use the write token.
 `build` has a read-only token and keeps no credentials in the checkout. It checks the tag name (`v`, then only letters,
 digits, `.`, `+` and `-`), then runs three make targets and hands `dist/` on as a workflow artifact:
 
-- `make release-check`;
+- `make release-check`: the tag is a plain `x.y.z` or `x.y.z-pre`;
 - `make lint test`: the checks of the CI workflow, so a tag on a commit that fails them publishes nothing;
-- `make release`: the files in `dist/`, built from an empty `dist/`.
+- `make release`: the files in `dist/`, built from an empty `dist/`, with the version of the tag in edelweissd and in
+  the JS SDK tarball.
 
 `publish` runs when `build` has succeeded. It holds the write token, builds nothing and needs neither Go nor Node. It
 downloads the artifact into `dist/` and runs two make targets:
@@ -204,9 +238,10 @@ downloads the artifact into `dist/` and runs two make targets:
 A compromised build could still hand over altered files under the expected names: `checksums.txt` shows that the files
 are consistent, not where they come from.
 
-The CI workflow (`.github/workflows/ci.yml`) runs `make lint test` and `make sdk-pack-check` on every push and pull
-request. The release workflow repeats `make lint test`, but not `make sdk-pack-check` (it needs the npm registry), so
-wait for the CI run on `main` before you tag, or run `make lint test sdk-pack-check` locally first.
+The CI workflow (`.github/workflows/ci.yml`) runs `make lint test` and `make sdk-pack-check` (with the tarball of
+`0.0.0-dev`) on every push and pull request. The release workflow repeats `make lint test`, but not
+`make sdk-pack-check` (it needs the npm registry), so wait for the CI run on `main` before you tag, or run
+`make lint test sdk-pack-check` locally first.
 `make release VERSION=<version>` builds the same release files locally.
 
 **Published versions are immutable.** Once a release may have been fetched, never move or delete the tags

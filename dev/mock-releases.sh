@@ -6,11 +6,35 @@
 #   edelweiss/testext-badsum/v0.1.0     raw binary with a wrong checksum (the installer must refuse it)
 #   edelweiss/testext-needs-pkg/v0.1.0  raw binary that requires a package no system has (the installer must refuse it)
 # ARCH selects the architecture (default: the host's).
+#
+# "sh dev/mock-releases.sh core ROOT VERSION BINARY [bad]" instead adds one release of edelweissd itself, for
+# make test-selfupdate, to the tree ROOT (and touches nothing else): ROOT/Pukka922/edelweiss/v<VERSION>/ with a copy of
+# BINARY as edelweissd_<VERSION>_linux_<ARCH> and its checksums.txt, which has the wrong checksum when "bad" is given.
 set -eu
 HOST_ARCH=$(go env GOARCH)
 ARCH=${ARCH:-$HOST_ARCH}
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 OUT=$ROOT/build/mock-releases
+
+# core_release ROOT VERSION BINARY [bad]
+core_release() {
+  d=$1/Pukka922/edelweiss/v$2
+  name=edelweissd_$2_linux_$ARCH
+  mkdir -p "$d"
+  cp "$3" "$d/$name"
+  if [ "${4:-}" = bad ]; then
+    printf '%064d  %s\n' 0 "$name" > "$d/checksums.txt"
+  else
+    (cd "$d" && sha256sum "$name" > checksums.txt)
+  fi
+}
+if [ "${1:-}" = core ]; then
+  [ $# -ge 4 ] && [ $# -le 5 ] || { echo "usage: mock-releases.sh core ROOT VERSION BINARY [bad]" >&2; exit 2; }
+  shift
+  core_release "$@"
+  exit 0
+fi
+
 WORK=$(mktemp -d)
 trap 'rm -rf "$WORK"' EXIT
 rm -rf "$OUT"

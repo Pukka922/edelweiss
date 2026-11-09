@@ -14,12 +14,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"sync"
 	"time"
 
 	"golang.org/x/mod/semver"
 
 	"github.com/Pukka922/edelweiss/core/internal/github"
+	"github.com/Pukka922/edelweiss/core/internal/oplock"
 )
 
 var (
@@ -92,19 +92,24 @@ type InstallerOptions struct {
 	Arch        string // the GOARCH extensions must be built for
 	MaxDownload int64
 	Logger      *slog.Logger
+	Busy        *oplock.Lock // shared with the self-update; nil: a lock of its own
 }
 
 // Installer installs and updates extensions from GitHub releases into the store of a Manager.
 type Installer struct {
 	opts InstallerOptions
-	busy sync.Mutex // held by Install and Update; a concurrent call gets ErrBusy
+	busy *oplock.Lock // held by Install and Update; a concurrent call gets ErrBusy
 }
 
 func NewInstaller(opts InstallerOptions) *Installer {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Installer{opts: opts}
+	busy := opts.Busy
+	if busy == nil {
+		busy = &oplock.Lock{}
+	}
+	return &Installer{opts: opts, busy: busy}
 }
 
 // Resolve looks up the release that source names and the extensions it offers for this system.

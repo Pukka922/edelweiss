@@ -29,6 +29,7 @@ import (
 
 	"github.com/Pukka922/edelweiss/core/internal/config"
 	"github.com/Pukka922/edelweiss/core/internal/extmgr"
+	"github.com/Pukka922/edelweiss/core/internal/selfupdate"
 	"github.com/Pukka922/edelweiss/core/internal/server"
 	"github.com/Pukka922/edelweiss/core/internal/testutil"
 	"github.com/Pukka922/edelweiss/core/internal/tlsutil"
@@ -659,4 +660,25 @@ func TestHostPowerReportsAFailureWithTheOutputOfTheCommand(t *testing.T) {
 	if !errors.Is(err, failure) || err.Error() != "/sbin/poweroff: exit status 1" {
 		t.Fatalf("error %v", err)
 	}
+}
+
+// The lock the daemon shares between the extension installer and the self-update is busy while the helper of a
+// self-update holds its lock in the state directory, also when an earlier edelweissd started it.
+func TestSharedLockSeesTheSelfUpdateHelper(t *testing.T) {
+	state := t.TempDir()
+	lock := sharedLock(state)
+	held, err := selfupdate.AcquireLock(selfupdate.Dir(state))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lock.TryLock() {
+		t.Fatal("granted while the helper runs")
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !lock.TryLock() {
+		t.Fatal("refused after the helper ended")
+	}
+	lock.Unlock()
 }

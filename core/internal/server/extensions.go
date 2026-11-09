@@ -120,6 +120,81 @@ func (s *Server) lookupExtension(c fiber.Ctx) (*extmgr.Extension, session.Sessio
 	return ext, sess, nil
 }
 
+// extRouteSegments is the number of segments that name the route of an extension:
+// /ext/<id>/api and /ext/<id>/ui.
+const extRouteSegments = 3
+
+// confineExtensionRoutes refuses a request whose dot segments would take it into or
+// out of the route of an extension. The router resolves "." and ".." segments, also
+// percent-encoded, before it matches a route (Fiber 3.6), so the guards of extAPI and
+// extUI would never see /ext/<id>/api/%2e%2e/_edelweiss/status: it would be routed as
+// /ext/<id>/_edelweiss/status and answered by the shell, and /x/../ext/<id>/api/hello
+// would reach the extension. A ".." inside the wildcard (/ext/<id>/ui/x/../index.js)
+// stays inside the route and is resolved there.
+func confineExtensionRoutes(c fiber.Ctx) error {
+	raw := string(c.Request().URI().PathOriginal())
+	if (extensionNamespace(raw) || extensionNamespace(c.Path())) && climbsInto(raw, extRouteSegments) {
+		return fiber.ErrNotFound
+	}
+	return c.Next()
+}
+
+// extensionNamespace reports whether the first segment of the request path p is
+// "ext" as the router matches it: ignoring case, with percent escapes decoded.
+func extensionNamespace(p string) bool {
+	first, _, _ := strings.Cut(strings.TrimPrefix(p, "/"), "/")
+	if dec, err := url.PathUnescape(first); err == nil {
+		first = dec
+	}
+	return strings.EqualFold(first, "ext")
+}
+
+// climbsInto reports whether a ".." segment of the request path p, in any spelling
+// (see dotSegment), resolves while no more than n segments are left before it, i.e.
+// whether resolving the dot segments of p changes its first n segments.
+func climbsInto(p string, n int) bool {
+	depth := 0
+	rest := strings.TrimPrefix(p, "/")
+	for {
+		seg, tail, more := strings.Cut(rest, "/")
+		switch dotSegment(seg) {
+		case 2:
+			if depth <= n {
+				return true
+			}
+			depth--
+		case 1: // a "." is removed and changes no other segment
+		default:
+			depth++
+		}
+		if !more {
+			return false
+		}
+		rest = tail
+	}
+}
+
+// dotSegment returns 1 for a "." and 2 for a ".." segment as the router reads seg,
+// each dot also spelled %2e or %2E, and 0 for any other segment. The router decodes
+// the escapes of unreserved characters once, so "%252e" and "..%2f" are no dot segments.
+func dotSegment(seg string) int {
+	dots := 0
+	for i := 0; i < len(seg); dots++ {
+		switch {
+		case seg[i] == '.':
+			i++
+		case len(seg)-i >= 3 && seg[i] == '%' && seg[i+1] == '2' && (seg[i+2] == 'e' || seg[i+2] == 'E'):
+			i += 3
+		default:
+			return 0
+		}
+	}
+	if dots > 2 {
+		return 0
+	}
+	return dots
+}
+
 // reservedPath reports whether p lies in the extension's reserved
 // sdk.InternalPrefix namespace (status, ui, ...), ignoring case.
 func reservedPath(p string) bool {
@@ -127,11 +202,12 @@ func reservedPath(p string) bool {
 	return lp == sdk.InternalPrefix || strings.HasPrefix(lp, sdk.InternalPrefix+"/")
 }
 
-// addressesReserved reports whether the wildcard of an extension API request
-// (percent-encoded, as Fiber hands it out) can address the reserved namespace.
-// The extension decodes the path itself, so "%5Fedelweiss" or "x/%2e%2e/_edelweiss"
-// must be caught as well; a path that cannot be decoded is refused outright
-// because a lenient decoder on the other side could read it differently.
+// addressesReserved reports whether the wildcard of an extension API request can
+// address the reserved namespace. Fiber hands the wildcard out as it routed it: the
+// escapes of unreserved characters decoded, dot segments resolved, every other escape
+// kept. The extension decodes the path itself, so "..%2F_edelweiss" must be caught as
+// well; a path that cannot be decoded is refused outright because a lenient decoder
+// on the other side could read it differently.
 func addressesReserved(raw string) bool {
 	if reservedPath(path.Clean("/" + raw)) {
 		return true
@@ -156,10 +232,10 @@ func (s *Server) extAPI(c fiber.Ctx) error {
 	return s.forward(c, ext, sess, p)
 }
 
-// plainFile reports whether the wildcard of an extension UI request (percent-
-// encoded, as Fiber hands it out) names a plain relative file path once the
+// plainFile reports whether the wildcard of an extension UI request (as Fiber
+// routed it, see addressesReserved) names a plain relative file path once the
 // extension has decoded it: no escape from the UI directory (also not via an
-// encoded slash or dot), nothing absolute, no NUL, nothing undecodable.
+// encoded slash), nothing absolute, no NUL, nothing undecodable.
 func plainFile(raw string) bool {
 	dec, err := url.PathUnescape(raw)
 	if err != nil || strings.ContainsRune(dec, 0) {

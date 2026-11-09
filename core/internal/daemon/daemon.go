@@ -24,7 +24,9 @@ import (
 	"github.com/Pukka922/edelweiss/core/internal/config"
 	"github.com/Pukka922/edelweiss/core/internal/extmgr"
 	"github.com/Pukka922/edelweiss/core/internal/github"
+	"github.com/Pukka922/edelweiss/core/internal/oplock"
 	"github.com/Pukka922/edelweiss/core/internal/procman"
+	"github.com/Pukka922/edelweiss/core/internal/selfupdate"
 	"github.com/Pukka922/edelweiss/core/internal/server"
 	"github.com/Pukka922/edelweiss/core/internal/session"
 	"github.com/Pukka922/edelweiss/core/internal/tlsutil"
@@ -40,6 +42,7 @@ const shutdownTimeout = 10 * time.Second
 
 // Run starts edelweissd and blocks until ctx is cancelled or the listener fails.
 func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
+	started := time.Now()
 	ctx, cancel := context.WithCancel(ctx) // stops the background goroutines on every return path
 	defer cancel()
 	if err := cfg.EnsureDirs(); err != nil {
@@ -78,12 +81,29 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	if err := reg.Watch(ctx); err != nil {
 		return err
 	}
+	busy := sharedLock(cfg.Paths.StateDir)
+	releases := github.NewClient(cfg.GitHub.APIURL, cfg.GitHub.Token, "edelweiss/"+version.Version)
 	installer := extmgr.NewInstaller(extmgr.InstallerOptions{
 		Manager:     reg,
-		Releases:    github.NewClient(cfg.GitHub.APIURL, cfg.GitHub.Token, "edelweiss/"+version.Version),
+		Releases:    releases,
 		Arch:        runtime.GOARCH,
 		MaxDownload: int64(cfg.Extensions.MaxDownloadSize),
 		Logger:      logger,
+		Busy:        busy,
+	})
+	// The binary as `service install` names it in the init script (os.Executable resolves it); without it no update
+	// is possible.
+	binary, err := os.Executable()
+	if err != nil {
+		logger.Warn("self-update: cannot tell the path of edelweissd", "err", err)
+		binary = ""
+	}
+	selfUpdate := selfupdate.New(selfupdate.Options{
+		Releases: releases, Source: selfupdate.Source, Arch: runtime.GOARCH, Version: version.Version, Binary: binary,
+		Root: "/", StateDir: cfg.Paths.StateDir, Listen: cfg.Listen, TLS: cfg.TLS.Enabled, Dev: cfg.Dev.Enabled,
+		MaxDownload: int64(cfg.Extensions.MaxDownloadSize), Lock: busy,
+		Launcher: selfupdate.ExecLauncher{Binary: "/proc/self/exe"}, Run: selfupdate.ExecRun, Logger: logger,
+		PPID: os.Getppid(),
 	})
 	shellFS, err := webui.FS(cfg.Dev.ShellDir)
 	if err != nil {
@@ -91,9 +111,10 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	}
 	app, err := server.New(server.Deps{
 		Config: cfg, Auth: authn, Sessions: sessions, Registry: reg, Installer: installer, Pool: pool, Shell: shellFS,
-		Dev: cfg.Dev.ShellDir != "", Version: version.Version, Logger: logger,
+		Dev: cfg.Dev.ShellDir != "", Version: version.Version, Started: started, Logger: logger,
 		Hostname: func() string { h, _ := os.Hostname(); return h },
 		Power:    hostPower(cfg, logger, execCommand), PowerDelay: time.Second,
+		SelfUpdate: selfUpdate,
 	})
 	if err != nil {
 		return err
@@ -161,6 +182,14 @@ func Run(ctx context.Context, cfg *config.Config, logger *slog.Logger) error {
 	_ = ln.Close()
 	stopPool()
 	return nil
+}
+
+// sharedLock is the lock of the installs and updates, of extensions and of edelweiss itself: one at a time, and none
+// while the helper of a self-update holds its lock in the state directory. The helper outlives the edelweissd that
+// started it (its second probe, lbu commit), so the new process sees it through the probe, not through the mutex.
+func sharedLock(stateDir string) *oplock.Lock {
+	dir := selfupdate.Dir(stateDir)
+	return oplock.New(func() bool { return selfupdate.HelperRunning(dir) })
 }
 
 // commandRunner runs a command and returns its combined output; the daemon uses execCommand, tests a recorder.

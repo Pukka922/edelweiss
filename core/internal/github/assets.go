@@ -69,3 +69,16 @@ func ParseChecksums(r io.Reader) (map[string]string, error) {
 	}
 	return out, nil
 }
+
+// coreAssetRe is the name of the edelweissd binary of a release: edelweissd_<version>_linux_<arch>, a raw binary. The
+// version is a semantic version without a leading v and without leading zeros in its numbers.
+var coreAssetRe = regexp.MustCompile(`^edelweissd_((?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)(?:[-+][0-9A-Za-z.-]+)?)_linux_(amd64|arm64)$`)
+
+// ParseCoreAsset reports whether name is the edelweissd binary of a release and what it says.
+func ParseCoreAsset(name string) (version, arch string, ok bool) {
+	m := coreAssetRe.FindStringSubmatch(name)
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], m[2], true
+}

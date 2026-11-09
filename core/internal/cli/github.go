@@ -14,6 +14,8 @@ import (
 	"github.com/Pukka922/edelweiss/core/internal/config"
 	"github.com/Pukka922/edelweiss/core/internal/extmgr"
 	"github.com/Pukka922/edelweiss/core/internal/github"
+	"github.com/Pukka922/edelweiss/core/internal/oplock"
+	"github.com/Pukka922/edelweiss/core/internal/selfupdate"
 	"github.com/Pukka922/edelweiss/core/internal/version"
 )
 
@@ -22,8 +24,11 @@ func releasesFor(cfg *config.Config) *github.Client {
 }
 
 func installerFor(cfg *config.Config, mgr *extmgr.Manager) *extmgr.Installer {
+	// The lock of the daemon's installs: none while the helper of a self-update holds its lock in the state directory.
+	dir := selfupdate.Dir(cfg.Paths.StateDir)
 	return extmgr.NewInstaller(extmgr.InstallerOptions{Manager: mgr, Releases: releasesFor(cfg), Arch: runtime.GOARCH,
 		MaxDownload: int64(cfg.Extensions.MaxDownloadSize),
+		Busy:        oplock.New(func() bool { return selfupdate.HelperRunning(dir) }),
 		// failures are reported on stderr by the command; the installer's own log would only duplicate them
 		Logger: slog.New(slog.NewTextHandler(io.Discard, nil))})
 }

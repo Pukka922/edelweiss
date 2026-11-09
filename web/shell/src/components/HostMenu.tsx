@@ -3,6 +3,7 @@ import { IconPower, IconRefresh } from "@tabler/icons-solidjs";
 import { batch, createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { Portal } from "solid-js/web";
 import { useShell } from "../context";
+import { waitForRestart } from "../health";
 import { closeDropdown } from "./dropdown";
 
 type Action = "reboot" | "poweroff";
@@ -25,13 +26,12 @@ export function HostMenu(props: { pollMs?: number; probeMs?: number; onBack?: ()
   const probeMs = () => props.probeMs ?? 5000;
   let menu: HTMLDetailsElement | undefined;
   let summary: HTMLElement | undefined;
-  let timer: ReturnType<typeof setTimeout> | undefined;
   // Bumped to end what is going on after a confirmation: when the page is closed or this menu is gone, a request or
   // a poll that is on its way must not start the wait or schedule the next poll.
   let epoch = 0;
   const stopWaiting = () => {
     epoch++;
-    clearTimeout(timer);
+    waiting?.abort();
   };
   onCleanup(stopWaiting);
 
@@ -60,24 +60,25 @@ export function HostMenu(props: { pollMs?: number; probeMs?: number; onBack?: ()
     setAsking(action);
   };
 
-  // after a restart: wait until /api/health fails once (the host went down) and answers again
-  const waitForHost = (mine: number, startedAt: number, wentDown: boolean) => {
-    timer = setTimeout(async () => {
-      let up = false;
-      try {
-        // the timeout keeps a request that hangs (the host dropped off the network) from stalling the loop
-        up = (await fetch("/api/health", { cache: "no-store", signal: AbortSignal.timeout(probeMs()) })).ok;
-      } catch {
-        up = false;
-      }
-      if (mine !== epoch) return;
-      if (up && wentDown) {
-        (props.onBack ?? (() => window.location.assign("/login")))();
-        return;
-      }
-      if (up && Date.now() - startedAt > 120_000) setStillUp(true);
-      waitForHost(mine, startedAt, wentDown || !up);
-    }, pollMs());
+  // after a restart: wait until /api/health fails once (the host went down) and answers again. After two minutes of
+  // an answering host the restart may have failed; the waiting goes on all the same (the host may still go down).
+  let waiting: AbortController | undefined;
+  const waitForHost = async (mine: number) => {
+    waiting = new AbortController();
+    const result = await waitForRestart({
+      before: undefined,
+      pollMs: pollMs(),
+      probeMs: probeMs(),
+      timeoutMs: 120_000,
+      signal: waiting.signal,
+    });
+    if (mine !== epoch) return;
+    if (result === "back") {
+      (props.onBack ?? (() => window.location.assign("/login")))();
+      return;
+    }
+    setStillUp(true);
+    void waitForHost(mine);
   };
 
   const confirm = async () => {
@@ -92,7 +93,7 @@ export function HostMenu(props: { pollMs?: number; probeMs?: number; onBack?: ()
         setAsking(undefined);
         setDone(action);
       });
-      if (action === "reboot") waitForHost(mine, Date.now(), false);
+      if (action === "reboot") void waitForHost(mine);
     } catch (err) {
       setAsking(undefined);
       focusSummary();

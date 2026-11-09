@@ -13,9 +13,12 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/Pukka922/edelweiss/core/internal/config"
 	"github.com/Pukka922/edelweiss/core/internal/extmgr"
+	"github.com/Pukka922/edelweiss/core/internal/selfupdate"
+	"github.com/Pukka922/edelweiss/core/internal/service"
 	"github.com/Pukka922/edelweiss/core/internal/testutil"
 	"github.com/Pukka922/edelweiss/core/internal/version"
 	"github.com/Pukka922/edelweiss/sdk/manifest"
@@ -339,6 +342,34 @@ func TestExtInstallFromGitHub(t *testing.T) {
 	}
 }
 
+// The CLI installer shares the daemon's rule: no install or update while the helper of a self-update holds its lock.
+func TestExtInstallRefusedWhileSelfUpdateRuns(t *testing.T) {
+	rs := testutil.NewReleaseServer(t)
+	release(rs, "v1.0.0", "1.0.0", binary(t, ""))
+	cfgPath := githubConfig(t, rs.URL)
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := selfupdate.AcquireLock(selfupdate.Dir(cfg.Paths.StateDir))
+	if err != nil {
+		t.Fatal(err)
+	}
+	code, _, errOut := run("ext", "install", "acme/tools", "--yes", "--config", cfgPath)
+	if code != 1 || !strings.Contains(errOut, "another installation is running") {
+		t.Fatalf("install while the update runs: %d %q", code, errOut)
+	}
+	if _, out, _ := run("ext", "list", "--config", cfgPath); strings.Contains(out, "testext") {
+		t.Fatalf("installed although the update runs:\n%s", out)
+	}
+	if err := held.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if code, _, errOut := run("ext", "install", "acme/tools", "--yes", "--config", cfgPath); code != 0 {
+		t.Fatalf("install after the update: %d %q", code, errOut)
+	}
+}
+
 func TestExtUpdate(t *testing.T) {
 	rs := testutil.NewReleaseServer(t)
 	release(rs, "v1.0.0", "1.0.0", binary(t, ""))
@@ -647,5 +678,75 @@ func TestDevFlagDecidesTheDevelopmentMode(t *testing.T) {
 	cfg = withSettings()
 	if level := applyDev(cfg, false); level != cfg.LogLevel() || cfg.Dev.Enabled || cfg.Dev.ShellDir != "" {
 		t.Fatalf("without --dev: level %v, %+v", level, cfg.Dev)
+	}
+}
+
+func TestServiceScriptCommand(t *testing.T) {
+	code, out, errOut := run("service", "script", "--binary", "/usr/local/sbin/edelweissd")
+	want, err := service.Script("/usr/local/sbin/edelweissd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != 0 || out != want || errOut != "" {
+		t.Fatalf("script: %d %q %q", code, out, errOut)
+	}
+	code, out, errOut = run("service", "script", "--binary", "/tmp/a b")
+	if code != 2 || out != "" || !strings.Contains(errOut, "binary path") {
+		t.Fatalf("unsafe: %d %q %q", code, out, errOut)
+	}
+	for _, args := range [][]string{{"service", "script"}, {"service", "script", "--binary", "/x", "extra"}} {
+		if code, _, errOut := run(args...); code != 2 || !strings.Contains(errOut, "Usage:") {
+			t.Fatalf("%v: %d %q", args, code, errOut)
+		}
+	}
+}
+
+// lockedBuffer is a log sink the helper may write to from a goroutine of its own.
+type lockedBuffer struct {
+	mu sync.Mutex
+	b  bytes.Buffer
+}
+
+func (l *lockedBuffer) Write(p []byte) (int, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.Write(p)
+}
+
+func (l *lockedBuffer) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.b.String()
+}
+
+// self-update-apply is the helper the server starts; it is no command for people and is in no usage text.
+func TestSelfUpdateApplyIsHidden(t *testing.T) {
+	if strings.Contains(usageText, "self-update") {
+		t.Fatalf("the usage names the helper:\n%s", usageText)
+	}
+	if _, out, _ := run("help"); strings.Contains(out, "self-update") {
+		t.Fatalf("help names the helper:\n%s", out)
+	}
+
+	log := &lockedBuffer{}
+	old := productionDeps
+	productionDeps = func() selfupdate.HelperDeps { // never the syslog or the cgroups of this machine
+		return selfupdate.HelperDeps{Log: log, Now: time.Now, Sleep: func(time.Duration) {},
+			Cgroup: filepath.Join(t.TempDir(), "cgroup"), Escape: filepath.Join(t.TempDir(), "escape")}
+	}
+	t.Cleanup(func() { productionDeps = old })
+
+	plan := filepath.Join(t.TempDir(), "plan.json") // not there: the helper gives up without a change
+	code, out, errOut := run("self-update-apply", plan)
+	if code != 1 || out != "" || strings.Contains(errOut, "unknown command") {
+		t.Fatalf("self-update-apply %s: %d %q %q", plan, code, out, errOut)
+	}
+	if !strings.Contains(log.String(), "cannot use the plan "+plan) {
+		t.Fatalf("the helper did not run:\n%s", log.String())
+	}
+	for _, args := range [][]string{{"self-update-apply"}, {"self-update-apply", plan, "extra"}} {
+		if code, _, errOut := run(args...); code != 2 || strings.Contains(errOut, "unknown command") || strings.Contains(errOut, "Usage:") {
+			t.Fatalf("%v: %d %q", args, code, errOut)
+		}
 	}
 }

@@ -279,3 +279,27 @@ func TestFailedWriteLeavesNoTempFile(t *testing.T) {
 		t.Error("temp file left behind")
 	}
 }
+
+func TestScript(t *testing.T) {
+	s, err := Script("/usr/local/sbin/edelweissd")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{"command=\"/usr/local/sbin/edelweissd\"", "supervisor=supervise-daemon"} {
+		if !strings.Contains(s, want) {
+			t.Errorf("script lacks %q", want)
+		}
+	}
+	o, _, _ := newOptions(t)
+	if err := Install(o); err != nil {
+		t.Fatal(err)
+	}
+	if got := read(t, o, InitScript); got != s {
+		t.Errorf("Install wrote another script than Script returns:\n%s\n---\n%s", got, s)
+	}
+	for _, bin := range []string{"/tmp/a b", "", "rel/x"} {
+		if _, err := Script(bin); !errors.Is(err, ErrUnsafeBinary) {
+			t.Errorf("%q: %v", bin, err)
+		}
+	}
+}
